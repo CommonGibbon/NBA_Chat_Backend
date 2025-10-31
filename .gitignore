@@ -6,3 +6,5 @@ AGENTS.md
 MISSION.md
 
 notebooks/
+
+__pycache__/
