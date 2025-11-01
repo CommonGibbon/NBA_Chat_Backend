@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from server.db.connection import engine
-from server.db.helpers import get_all_chat_ids, get_chat_messages
+from server.db.helpers import get_all_chat_ids, get_chat_messages, create_chat, chat_exists, insert_message
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -8,7 +8,12 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from server.openai_client import OpenAIClient
 import sys
+from pydantic import BaseModel
+from typing import Optional
 
+class ChatRequest(BaseModel):
+    chat_id: Optional[str] = None
+    message: str
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -73,3 +78,23 @@ def get_messages(chat_id: str):
             raise HTTPException(status_code=404, detail="Chat not found")
     
     return {"chat_id": chat_id, "messages": messages}
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    # when a chat request is made, it might not have a chat_id yet, so we need to create one
+    chat_id = request.chat_id
+    if not chat_id or not chat_exists(chat_id):
+        chat_id = create_chat()
+
+    # insert the user's message into the chat db
+    insert_message(chat_id, "user", request.message) 
+
+    # get the full chat history, we'll send this to the AI to have it generate a response.
+    messages = get_chat_messages(chat_id)
+    history = [{"role": msg["role"], "content": msg["content"]} for msg in messages] 
+    # generate a response from the assistant
+    assistant_reply = await app.state.openai_client.get_completion(history)
+    # insert the assistant message into the chat history
+    insert_message(chat_id, "assistant", assistant_reply)
+    
+    return {"chat_id": chat_id, "message": assistant_reply} # return the chat ID and assistant reply to the caller.

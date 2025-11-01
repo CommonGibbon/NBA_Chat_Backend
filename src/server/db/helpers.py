@@ -25,6 +25,16 @@ def create_chat() -> str:
         # Always close the session to free up database connections
         session.close()
 
+def chat_exists(chat_id: str) -> bool:
+    """Check if a chat exists by its UUID."""
+    session = Session(engine)
+
+    try:
+        chat = session.query(Chat).filter_by(id=chat_id).first()
+        return chat is not None
+    finally:
+        session.close()
+
 def insert_message(chat_id: str, role: str, content: str) -> str:
     """Insert a message and return its UUID."""
     if role not in ('user', 'assistant', 'system'):
