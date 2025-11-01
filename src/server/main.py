@@ -4,11 +4,15 @@ from server.db.helpers import get_all_chat_ids, get_chat_messages
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from mcp.client.session import ClientSession
+from mcp.client.stdio import stdio_client, StdioServerParameters
+from server.openai_client import OpenAIClient
+import sys
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # When the FastAPI app starts, we'll do the following (verify the db connection is live)
+    # Verify database connection
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -17,9 +21,28 @@ async def lifespan(app: FastAPI):
         print(f"✗ Database connection failed: {e}")
         raise
     
-    yield # server runs here
+    # Start MCP server and initialize session
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "nba_mcp_server.mcp_server"]
+    )
     
-    # shutdown logic will go here
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as mcp_session:
+            await mcp_session.initialize()
+            print("✓ MCP server initialized")
+            
+            tool_list = await mcp_session.list_tools()
+            openai_client = OpenAIClient(mcp_session, tool_list.tools)
+            print("✓ OpenAI client initialized")
+            
+            app.state.mcp_session = mcp_session
+            app.state.openai_client = openai_client
+            
+            yield # server runs here
+    
+    # MCP cleanup happens automatically when exiting the context managers
+    print("✓ MCP server shutdown")
 
 app = FastAPI(lifespan=lifespan)
 

@@ -28,7 +28,7 @@ async def run():
     # 1) Start MCP server via stdio
     server = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "nbachat.mcp_server"],  # adjust if needed
+        args=["-m", "nba_chat_mcp_server.mcp_server"],  # adjust if needed
     )
 
     async with stdio_client(server) as (read, write):
