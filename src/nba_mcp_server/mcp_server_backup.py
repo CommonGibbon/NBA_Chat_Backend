@@ -5,45 +5,14 @@ from enum import Enum
 from nba_api.stats.endpoints import *
 from nba_api.stats.static import players, teams
 import datetime
-
-mcp = FastMCP("nba-chat")
-
-class ToolCategory(str, Enum):
-    player = "player"
-    team = "team"
-    league = "league"
-    game = "game"
-    boxscore = "boxscore"
-    draft = "draft"
-    franchise = "franchise"
-    playoff = "playoff"
-    season = "season"
-    base = "base"
-ALLOWED = {c.value for c in ToolCategory if c != ToolCategory.base} # the llm has no need to ever request "base" tools since they're always included.
-
-@mcp.tool(meta={"category":["base"]})
-def get_tools_by_category(categories: List[str]) -> List[str]:
-    """
-    Request to load tools from specific categories. Multiple categories may be selected.
-    Args:
-        categories - a list of tool categories to filter on. Categories must be one of the following:
-            player - Player-specific statistics and information
-            team- Team-specific statistics and information
-            league - League-wide statistics and standings
-            game- Game-specific data and events
-            boxscore- Box score variants for games
-            draft- Draft-related data
-            franchise - Franchise history and leaders
-            playoff - Playoff-specific data
-            season - Season schedules and IST standings
-    """
-    requested = {c.lower().strip() for c in categories}
-    invalid = requested - ALLOWED
-    if invalid:
-        raise ValueError(f"Invalid categories: {sorted(invalid)}. Allowed: {sorted(ALLOWED)}")
-    
-    result = list(requested | {"base"})
-    return sorted(result)
+"""
+ALL OF THE FUNCTIONS HERE ARE UNDER DOCUMENTED AND MAYBE NOT WORKING? 
+AND WE HAVE SEVERAL VERSIONS OF SOME. 
+MY PLAN IS TO GO THROUGH ALL OF THESE:
+    - TEST THE LATEST VERSION IF THERE IS ONE AND REMOVE OLDER ONES
+    - UPDATED THE DOCUMENTATION FOR CLARITY
+    - MOVE FUNCTIONS TO MCP_SERVER.PY
+"""
 
 def find_player_id(player_name: str) -> Optional[int]:
     """Helper function to find player ID by name."""
@@ -72,85 +41,6 @@ def get_current_season() -> str:
         return f"{year}-{str(year + 1)[-2:]}"
     else:
         return f"{year - 1}-{str(year)[-2:]}"
-
-
-@mcp.tool(meta={"category": ['league', 'historical']})
-def get_all_time_leaders(
-    per_mode: str = "Totals",
-    season_type: str = "Regular Season",
-    top_x: int = 10,
-    stat_categories: Optional[List[str]] = None
-) -> str:
-    """
-    Get all-time statistical leaders across all NBA history.
-    Returns leaderboards for specified statistical categories.
-    
-    Args:
-        per_mode: "Totals" or "PerGame".
-        season_type: "Regular Season", "Playoffs", or "All Star".
-        top_x: Number of leaders to return (default 10).
-        stat_categories: List of stat categories to return.
-                        Options: "points", "assists", "rebounds", "blocks", "steals", 
-                                "turnovers", "field_goals", "field_goal_pct", "threes",
-                                "three_pct", "free_throws", "free_throw_pct", 
-                                "offensive_rebounds", "defensive_rebounds", "fouls", "games"
-                        If None, returns points, assists, and rebounds.
-    """
-    """
-    Hidden Parameters:
-    - league_id: League ID ("00" for NBA).
-    """
-    # Default to current behavior if no categories specified
-    if stat_categories is None:
-        stat_categories = ["points", "assists", "rebounds"]
-    
-    # Map user-friendly names to data object attributes
-    category_mapping = {
-        "points": ("pts_leaders", "Points"),
-        "assists": ("ast_leaders", "Assists"), 
-        "rebounds": ("reb_leaders", "Rebounds"),
-        "blocks": ("blk_leaders", "Blocks"),
-        "steals": ("stl_leaders", "Steals"),
-        "turnovers": ("tov_leaders", "Turnovers"),
-        "field_goals": ("fgm_leaders", "Field Goals Made"),
-        "field_goal_pct": ("fg_pct_leaders", "Field Goal %"),
-        "threes": ("fg3m_leaders", "3-Point Field Goals"),
-        "three_pct": ("fg3_pct_leaders", "3-Point %"),
-        "free_throws": ("ftm_leaders", "Free Throws Made"),
-        "free_throw_pct": ("ft_pct_leaders", "Free Throw %"),
-        "offensive_rebounds": ("oreb_leaders", "Offensive Rebounds"),
-        "defensive_rebounds": ("dreb_leaders", "Defensive Rebounds"),
-        "fouls": ("pf_leaders", "Personal Fouls"),
-        "games": ("gp_leaders", "Games Played")
-    }
-    
-    # Validate categories
-    invalid_categories = [cat for cat in stat_categories if cat not in category_mapping]
-    if invalid_categories:
-        return f"Invalid stat categories: {', '.join(invalid_categories)}. Valid options: {', '.join(category_mapping.keys())}"
-    
-    try:
-        data = alltimeleadersgrids.AllTimeLeadersGrids(
-            league_id="00",
-            per_mode_simple=per_mode,
-            season_type=season_type,
-            topx=top_x
-        )
-        
-        result = f"# All-Time Leaders\n\n"
-        result += f"*Per Mode: {per_mode} | Season Type: {season_type}*\n\n"
-        
-        for category in stat_categories:
-            attr_name, display_name = category_mapping[category]
-            df = getattr(data, attr_name).get_data_frame()
-            result += f"## {display_name}\n"
-            result += df.to_markdown(index=False) + "\n\n"
-        
-        return result
-        
-    except Exception as e:
-        return f"Error retrieving all-time leaders: {str(e)}"
-
 
 @mcp.tool(meta={"category": ['league', 'statistics']})
 def get_assist_leaders(
@@ -2041,49 +1931,6 @@ def get_play_by_play(game_id: str, start_period: int = 0, end_period: int = 10) 
     try:
         data = playbyplayv2.PlayByPlayV2(game_id=game_id, start_period=start_period, end_period=end_period)
         return f"# Play by Play - {game_id}\n\n" + data.play_by_play.get_data_frame().to_markdown(index=False)
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-
-@mcp.tool(meta={"category": ['player', 'statistics']})
-def get_player_regular_season_stats(player_name: str, season_type: str = "Regular") -> str:
-    """
-    Get a player's complete regular season statistics broken down by season.
-    Use this when the user asks for a player's historical performance in the regular season,
-    season-by-season stats, or career data. Requires the player's exact
-    full name (first and last name).
-    Returns a markdown formatted table.
-    
-    Required Args:
-        player_name: The player's full name (e.g., "LeBron James")
-    Optional Args:
-        season_type [default: Regular Season]: Any of: "Regular Season", "All Star", "Post Season", "College Season"
-    
-    """
-    """
-    Hidden Parameters:
-    - league_id: League ID ("00" for NBA).
-    - per_mode36: Options appear to be Per36, PerGame, and Totals. Totals is derivable so I just defaulted to PerGame
-    Other Notes:
-    - This also returns season rankings, but only for the regular and post seasons, so I think these could be exposed via a separate funciton. 
-    """
-    try:
-        player_id = find_player_id(player_name)
-        if not player_id:
-            return f"Player '{player_name}' not found."
-        career_stats = playercareerstats.PlayerCareerStats(player_id=player_id, per_mode36="PerGame")
-        # only return stats for the desired season type:
-        if season_type == "All Star":
-            career_stats = career_stats.season_totals_all_star_season
-        if season_type == "Post Season":
-            career_stats = career_stats.season_totals_post_season
-        elif season_type == "College Season":
-            career_stats = career_stats.season_totals_college_season
-        else: # default to regular sseason
-            season_type = "Regular Season" # just in case something illegal was provided
-            career_stats = career_stats.season_totals_regular_season
-
-        return f"{player_name} Career Stats for {season_type}\n\n" + career_stats.get_data_frame().to_markdown(index=False)
     except Exception as e:
         return f"Error: {str(e)}"
 

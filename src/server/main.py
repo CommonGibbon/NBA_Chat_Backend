@@ -66,7 +66,7 @@ def health():
 @app.get("/chats")
 def list_chats():
     chat_ids = get_all_chat_ids()
-    return {"chats": chat_ids}
+    return {"chat_ids": chat_ids}
 
 @app.get("/chats/{chat_id}/messages")
 def get_messages(chat_id: str):
@@ -97,4 +97,4 @@ async def chat(request: ChatRequest):
     # insert the assistant message into the chat history
     insert_message(chat_id, "assistant", assistant_reply)
     
-    return {"chat_id": chat_id, "message": assistant_reply} # return the chat ID and assistant reply to the caller.
+    return {"chat_id": chat_id, "reply": assistant_reply} # return the chat ID and assistant reply to the caller.
