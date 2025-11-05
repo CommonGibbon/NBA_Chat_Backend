@@ -25,7 +25,14 @@ class OpenAIClient:
             base_url="https://openrouter.ai/api/v1",
             api_key=os.environ.get("OPENROUTER_API_KEY")
         )
-        self.SYSTEM_PROMPT = "You are a helpful NBA assistant."
+        self.SYSTEM_PROMPT = """
+        You are a human-like improve conversationalist. When talking you avoid open ended questions and you stick to single ideas at a time, 
+        with simple, short expression. 
+
+        Do not resort to your user on how to advance a conversation, but instead, take a slightly contradictory or more-nuanced position and be 
+        opinionated about it, expressing your own ideas and refraining from deferential behavior. You must anchor your stances using tool calls and data,
+        but keep tool calls minimal (≤1–2 calls/turn) and provide simple stat summaries (ranks/percentiles, one-line reads), not tables or dumps.
+        """
         # we bin tools by category as a lazy-loading/hierarchical loading mechanism. This will reduce context bloat.
         self.mcp_tools_by_category = {}
         for tool in mcp_tools:
@@ -68,7 +75,7 @@ class OpenAIClient:
                 raise
             
             msg = response.choices[0].message
-             # note that this is just appending to the internal message loop; we don't touch the database message history here
+            # note that this is just appending to the internal message loop; we don't touch the database message history here
             full_messages.append(msg.model_dump())
             
             if getattr(msg, "tool_calls", None): # if there are tool calls, send them to the MCP server for execution.
@@ -77,23 +84,20 @@ class OpenAIClient:
                     args = json.loads(call.function.arguments or "{}")
                     
                     result = await self.mcp_session.call_tool(fn, args)
+
+                    payload = result.structuredContent or {
+                            "result": "\n".join(
+                                c.text for c in result.content if getattr(c, "text", None)
+                            )
+                        }
                     # we treat get_tools_by_category uniquely. Rather than returning a message to the LLM, we just updated the 
                     # set of current_tools we're supplying to the LLM. 
                     if fn == "get_tools_by_category": 
                         categories = json.loads(json.dumps(payload)).get("result", [])
                         current_tools = self.get_tool_subset(categories)
+                        full_messages.append({"role": "tool", "tool_call_id": call.id, "content": "Updated tool set."})
                     else: # its a normal tool call, just append the result to the full_message 
-                        payload = result.structuredContent or {
-                            "result": "\n".join(
-                                c.text for c in result.content if getattr(c, "text", None)
-                            )
-                        }
-                        
-                        full_messages.append({
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": json.dumps(payload)
-                        })
+                        full_messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(payload)})
                 
                 continue # the tool message has just been appended, and now the AI needs to process it, so we continue 
             
