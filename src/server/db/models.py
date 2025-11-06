@@ -28,6 +28,8 @@ class Message(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     chat_id: Mapped[UUID] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"))
+    user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    replied_to_id: Mapped[UUID | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
     role: Mapped[str] = mapped_column(String)
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(default=datetime.now)
@@ -35,8 +37,19 @@ class Message(Base):
     # Relationship: many messages belong to one chat. back_propagates means if we append a new message to a Chat object, 
     # we'll automatically create a new Message object accordinly.
     chat: Mapped["Chat"] = relationship(back_populates="messages")
+    user: Mapped["User"] = relationship(back_populates="messages")
 
     # Constraint matching your scheme - role must be user/assistant/system
     __table_args__ = (
         CheckConstraint("role IN ('user', 'assistant', 'system')", name = "check_role"),
     )
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    username: Mapped[str] = mapped_column(String, unique=True)
+    api_key: Mapped[str] = mapped_column(String, unique=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.now)
+    
+    messages: Mapped[List["Message"]] = relationship(back_populates="user", cascade="all, delete-orphan")

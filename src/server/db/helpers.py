@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from .models import Chat, Message
+from .models import Chat, Message, User
 from .connection import engine
 from typing import List, Dict, Any
 
@@ -35,7 +35,7 @@ def chat_exists(chat_id: str) -> bool:
     finally:
         session.close()
 
-def insert_message(chat_id: str, role: str, content: str) -> str:
+def insert_message(chat_id: str, role: str, content: str, user_id: str | None = None) -> str:
     """Insert a message and return its UUID."""
     if role not in ('user', 'assistant', 'system'):
         raise ValueError(f"Invalid role: {role}. Must be 'user', 'assistant', or 'system'.")
@@ -50,7 +50,8 @@ def insert_message(chat_id: str, role: str, content: str) -> str:
         new_message = Message(
             chat_id=chat_id,
             role=role,
-            content=content
+            content=content,
+            user_id=user_id
         )
         
         session.add(new_message)
@@ -85,5 +86,22 @@ def get_all_chat_ids() -> List[str]:
     try:
         chats = session.query(Chat).order_by(Chat.created_at.desc()).all()
         return [str(chat.id) for chat in chats]
+    finally:
+        session.close()
+
+    
+def get_user_by_api_key(api_key: str) -> Dict[str, Any] | None:
+    """Get user by API key, returns None if not found."""
+    session = Session(engine)
+    
+    try:
+        user = session.query(User).filter_by(api_key=api_key).first()
+        if not user:
+            return None
+        
+        return {
+            "id": str(user.id),
+            "username": user.username
+        }
     finally:
         session.close()

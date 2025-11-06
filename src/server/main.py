@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Header, Depends
 from server.connection_manager import ConnectionManager
 from server.db.connection import engine
-from server.db.helpers import get_all_chat_ids, get_chat_messages, create_chat, chat_exists, insert_message
+from server.db.helpers import get_all_chat_ids, get_chat_messages, create_chat, chat_exists, insert_message, get_user_by_api_key
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -16,6 +16,13 @@ import asyncio
 class ChatRequest(BaseModel):
     chat_id: Optional[str] = None
     message: str
+
+async def get_current_user(x_api_key: str = Header(...)):
+    print(f"Received API key: {x_api_key}")
+    user = get_user_by_api_key(x_api_key)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return user
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -69,6 +76,10 @@ app.add_middleware(
 def health():
     return {"status": "ok"}
 
+@app.get("/users/me")
+def get_me(user: dict = Depends(get_current_user)):
+    return user
+
 @app.get("/chats")
 def list_chats():
     chat_ids = get_all_chat_ids()
@@ -112,7 +123,7 @@ async def generate_assistant_reply(chat_id: str, openai_client, connection_manag
         assistant_reply = await app.state.openai_client.get_completion(history)
 
         # insert the assistant message into the chat history
-        insert_message(chat_id, "assistant", assistant_reply)
+        insert_message(chat_id, "assistant", assistant_reply, None)
 
         # Get the assistant message we just inserted
         messages = get_chat_messages(chat_id)
@@ -134,14 +145,14 @@ async def generate_assistant_reply(chat_id: str, openai_client, connection_manag
 
 
 @app.post("/chat")
-async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
+async def chat(request: ChatRequest, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
     # when a chat request is made, it might not have a chat_id yet, so we need to create one
     chat_id = request.chat_id
     if not chat_id or not chat_exists(chat_id):
         chat_id = create_chat()
 
     # insert the user's message into the chat db
-    insert_message(chat_id, "user", request.message)
+    insert_message(chat_id, "user", request.message, user_id=user["id"])
 
     # get the user message we just inserted so we can build a payload to send back to the client
     # this may be silly, but for simplicities sake, I'm treating the background as the string one source of truth, which means the 
@@ -149,7 +160,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
     messages = get_chat_messages(chat_id)
     user_msg = messages[-1]
 
-    # Puse mssage_created event for user message
+    # Push message_created event for user message
     await app.state.connection_manager.send_to_chat(chat_id, {
         "type": "message_created",
         "chat_id": chat_id,
@@ -157,7 +168,8 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
             "role": user_msg["role"],
             "content": user_msg["content"],
             "id": str(user_msg["id"]),
-            "created_at": user_msg["created_at"].isoformat()
+            "created_at": user_msg["created_at"].isoformat(),
+            "username": user["username"]
         }
     })
 
