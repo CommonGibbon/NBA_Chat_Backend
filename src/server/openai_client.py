@@ -1,3 +1,4 @@
+import anyio
 import os
 import json
 from typing import List, Dict
@@ -19,11 +20,13 @@ def mcp_tools_to_openai_tools(mcp_tools):
     return tools
 
 class OpenAIClient:
-    def __init__(self, mcp_session, mcp_tools):
+    def __init__(self, mcp_session, mcp_tools, mcp_lock):
         self.mcp_session = mcp_session
+        self.mcp_lock = mcp_lock
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ.get("OPENROUTER_API_KEY")
+            api_key=os.environ.get("OPENROUTER_API_KEY"),
+            timeout=90.0
         )
         self.SYSTEM_PROMPT = """
         You are a human-like improve conversationalist. When talking you avoid open ended questions and you stick to single ideas at a time, 
@@ -65,10 +68,12 @@ class OpenAIClient:
         # represents its aggregated knowledge from the tool calls.
         while True:
             try:
-                response = self.client.chat.completions.create(
-                    model="openai/gpt-5-mini",
-                    messages=full_messages,
-                    tools=current_tools
+                response = await anyio.to_thread.run_sync(
+                    lambda: self.client.chat.completions.create(
+                        model="openai/gpt-5-mini",
+                        messages=full_messages,
+                        tools=current_tools
+                    )
                 )
             except Exception as e:
                 print("OpenRouter error:", repr(e))
@@ -83,7 +88,8 @@ class OpenAIClient:
                     fn = call.function.name
                     args = json.loads(call.function.arguments or "{}")
                     
-                    result = await self.mcp_session.call_tool(fn, args)
+                    async with self.mcp_lock:
+                        result = await self.mcp_session.call_tool(fn, args)
 
                     payload = result.structuredContent or {
                             "result": "\n".join(
