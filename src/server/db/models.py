@@ -18,6 +18,10 @@ class Chat(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default = uuid4)
     created_at: Mapped[datetime] = mapped_column(default=datetime.now)
 
+    # a chat can reference a report for context
+    report_id: Mapped[UUID | None] = mapped_column(ForeignKey("match_analysis_reports.id", ondelete="SET NULL"), nullable=True)
+    report: Mapped["MatchAnalysisReport"] = relationship()
+
     # Relationship: one chat has many messages. back_populates allows us to automatically append a new message to this list when
     #  new message object when we create a new message object (with a matching chat_id)
     messages: Mapped[List["Message"]] = relationship(back_populates="chat", cascade="all, delete-orphan")
@@ -53,3 +57,14 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.now)
     
     messages: Mapped[List["Message"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+
+class MatchAnalysisReport(Base):
+    __tablename__ = "match_analysis_reports"
+    
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    team1: Mapped[str] = mapped_column(String)
+    team2: Mapped[str] = mapped_column(String)
+    game_date: Mapped[datetime] = mapped_column()
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.now)

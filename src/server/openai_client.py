@@ -20,22 +20,16 @@ def mcp_tools_to_openai_tools(mcp_tools):
     return tools
 
 class OpenAIClient:
-    def __init__(self, mcp_session, mcp_tools, mcp_lock):
+    def __init__(self, mcp_session, mcp_tools, mcp_lock, model: str, system_prompt: str):
         self.mcp_session = mcp_session
         self.mcp_lock = mcp_lock
+        self.model = model
+        self.system_prompt = system_prompt
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=os.environ.get("OPENROUTER_API_KEY"),
             timeout=90.0
         )
-        self.SYSTEM_PROMPT = """
-        You are a human-like improve conversationalist. When talking you avoid open ended questions and you stick to single ideas at a time, 
-        with simple, short expression. 
-
-        Do not resort to your user on how to advance a conversation, but instead, take a slightly contradictory or more-nuanced position and be 
-        opinionated about it, expressing your own ideas and refraining from deferential behavior. You must anchor your stances using tool calls and data,
-        but keep tool calls minimal (≤1–2 calls/turn) and provide simple stat summaries (ranks/percentiles, one-line reads), not tables or dumps.
-        """
         # we bin tools by category as a lazy-loading/hierarchical loading mechanism. This will reduce context bloat.
         self.mcp_tools_by_category = {}
         for tool in mcp_tools:
@@ -62,7 +56,7 @@ class OpenAIClient:
     
     async def get_completion(self, messages: List[Dict[str, str]]) -> str:
         """Get OpenAI completion for message history."""
-        full_messages = [{"role": "system", "content": self.SYSTEM_PROMPT}] + messages # attach full message history whenever we send a new message
+        full_messages = [{"role": "system", "content": self.system_prompt}] + messages # attach full message history whenever we send a new message
         current_tools = self.mcp_tools_by_category["base"] # the LLM starts off with access to just the basic tools
         # the loop below is a tool-calling loop. Basically we just keep calling the API until it's done calling tools. The final response 
         # represents its aggregated knowledge from the tool calls.
@@ -70,7 +64,7 @@ class OpenAIClient:
             try:
                 response = await anyio.to_thread.run_sync(
                     lambda: self.client.chat.completions.create(
-                        model="openai/gpt-5-mini",
+                        model=self.model,
                         messages=full_messages,
                         tools=current_tools
                     )
