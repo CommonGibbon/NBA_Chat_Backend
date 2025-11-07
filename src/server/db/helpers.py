@@ -123,6 +123,23 @@ def get_all_chat_ids() -> List[str]:
     finally:
         session.close()
 
+def get_all_chats() -> List[Dict[str, Any]]:
+    """Get all chats with their metadata, ordered by creation time (newest first)."""
+    session = Session(engine)
+    
+    try:
+        chats = session.query(Chat).order_by(Chat.created_at.desc()).all()
+        return [
+            {
+                "chat_id": str(chat.id),
+                "created_at": chat.created_at.isoformat(),
+                "report_id": str(chat.report_id) if chat.report_id else None
+            }
+            for chat in chats
+        ]
+    finally:
+        session.close()
+
     
 def get_user_by_api_key(api_key: str) -> Dict[str, Any] | None:
     """Get user by API key, returns None if not found."""

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Header, Depends
 from server.connection_manager import ConnectionManager
 from server.db.connection import engine
-from server.db.helpers import get_all_chat_ids, get_chat_messages, create_chat, chat_exists, insert_message, get_user_by_api_key, create_match_analysis_report, get_match_analysis_report, get_all_match_analysis_reports, get_chat, get_chats_by_report
+from server.db.helpers import get_all_chat_ids, get_all_chats, get_chat_messages, create_chat, chat_exists, insert_message, get_user_by_api_key, create_match_analysis_report, get_match_analysis_report, get_all_match_analysis_reports, get_chat, get_chats_by_report
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -90,8 +90,8 @@ def get_me(user: dict = Depends(get_current_user)):
 
 @app.get("/chats")
 def list_chats():
-    chat_ids = get_all_chat_ids()
-    return {"chat_ids": chat_ids}
+    chats = get_all_chats()
+    return {"chats": chats}
 
 @app.get("/chats/{chat_id}/messages")
 def get_messages(chat_id: str):
@@ -195,7 +195,15 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks, user: di
 
     # Queue background task for assistant reply, this will send its own update via the connection manager once it completes.
     background_tasks.add_task(generate_assistant_reply, chat_id, app.state.chat_client, app.state.connection_manager)
-    return {"chat_id": chat_id, "queued": True}
+    
+    # Get chat metadata to return
+    chat = get_chat(chat_id)
+    return {
+        "chat_id": chat_id,
+        "queued": True,
+        "created_at": chat["created_at"],
+        "report_id": chat["report_id"]
+    }
 
 @app.get("/reports/match-analysis/{report_id}/chats")
 def get_report_chats(report_id: str):
