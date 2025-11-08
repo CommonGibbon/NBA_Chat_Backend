@@ -8,7 +8,8 @@ from sqlalchemy import text
 from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from server.openai_client import OpenAIClient
-from server.agents import chat_agent, match_analysis_agent
+from server.agents import chat_agent
+from server.agents.match_analysis import orchestrator
 import sys
 from pydantic import BaseModel
 from typing import Optional
@@ -228,23 +229,30 @@ def get_report(report_id: str):
 @app.post("/reports/match-analysis")
 async def generate_match_analysis(request: MatchAnalysisRequest, background_tasks: BackgroundTasks):
     """Generate a match analysis report for an upcoming game."""
-    # Create matchup agent; since this is a one-off request, we don't need to worry about the agent's state
-    matchup_client = OpenAIClient(
-        app.state.mcp_session,
-        (await app.state.mcp_session.list_tools()).tools,
-        asyncio.Lock(),
-        match_analysis_agent.MODEL,
-        match_analysis_agent.SYSTEM_PROMPT
+    # Get MCP session and tools
+    mcp_session = app.state.mcp_session
+    tools = (await mcp_session.list_tools()).tools
+    
+    # Step 1: Run parallel research agents
+    research_findings = await orchestrator.generate_research(
+        mcp_session, 
+        tools,
+        team1=request.team1,
+        team2=request.team2,
+        game_date=request.game_date
     )
     
-    # Generate the report
-    initial_message = f"""Your task is to generate a comprehensive matchup analysis for the upcoming game 
-                        {request.team1} vs {request.team2} on {request.game_date}. 
-                        Todays date is {datetime.now().strftime('%Y-%m-%d')}.
-                        """
-    report_content = await matchup_client.get_completion([{"role": "user", "content": initial_message}])
+    # Step 2: Writer agent creates editorial from research
+    report_content = await orchestrator.write_editorial(
+        mcp_session,
+        tools,
+        research_findings,
+        team1=request.team1,
+        team2=request.team2,
+        game_date=request.game_date
+    )
     
-    # Save to database
+    # Step 3: Save to database
     report_id = create_match_analysis_report(
         team1=request.team1,
         team2=request.team2,
