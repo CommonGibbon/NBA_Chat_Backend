@@ -15,6 +15,10 @@ from pydantic import BaseModel
 from typing import Optional
 import asyncio
 from datetime import datetime
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 class ChatRequest(BaseModel):
     chat_id: Optional[str] = None
@@ -45,28 +49,56 @@ async def lifespan(app: FastAPI):
         raise
     
     # Start MCP server and initialize session
-    server_params = StdioServerParameters(
+    nba_params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "nba_mcp_server.mcp_server"]
     )
+
+    perplexity_params = StdioServerParameters(
+        command="uvx",
+        args=["perplexity-mcp"],
+        env={"PERPLEXITY_API_KEY": os.getenv("PERPLEXITY_API_KEY", "")}
+    )
+
+    mcp_sessions = {}
+    nba_tools = []
+    persistent_tools = []
     
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as mcp_session:
-            await mcp_session.initialize()
-            print("✓ MCP server initialized")
-            
-            tool_list = await mcp_session.list_tools()
-            mcp_lock = asyncio.Lock()
-            chat_client = OpenAIClient(mcp_session, tool_list.tools, mcp_lock, chat_agent.MODEL, chat_agent.SYSTEM_PROMPT)
-            print("✓ OpenAI client initialized")
-            connection_manager = ConnectionManager()
-            print("✓ Connection manager initialized")
-            
-            app.state.mcp_session = mcp_session
-            app.state.chat_client = chat_client
-            app.state.connection_manager = connection_manager
-            
-            yield # server runs here
+    async with (
+        stdio_client(nba_params) as (nba_read, nba_write),
+        stdio_client(perplexity_params) as (perp_read, perp_write),
+        ClientSession(nba_read, nba_write) as nba_session,
+        ClientSession(perp_read, perp_write) as perp_session
+    ):
+        # Initialize all mcp sessions:
+        await nba_session.initialize()
+        await perp_session.initialize()
+        print("✓ MCP servers initialized")
+        
+        # Get tools
+        nba_tool_list = await nba_session.list_tools()
+        perp_tool_list = await perp_session.list_tools()
+
+        nba_tools = nba_tool_list.tools
+        persistent_tools = perp_tool_list.tools 
+
+        # Store sessions
+        mcp_sessions["nba"] = nba_session
+        mcp_sessions["perplexity"] = perp_session
+
+        # Create clients
+        mcp_lock = asyncio.Lock()
+        chat_client = OpenAIClient(mcp_sessions, nba_tools, persistent_tools, mcp_lock, chat_agent.MODEL, chat_agent.SYSTEM_PROMPT)
+        connection_manager = ConnectionManager()
+
+        # Store in app state
+        app.state.mcp_sessions = mcp_sessions
+        app.state.nba_tools = nba_tools
+        app.state.persistent_tools = persistent_tools
+        app.state.chat_client = chat_client
+        app.state.connection_manager = connection_manager
+        
+        yield # server runs here
     
     # MCP cleanup happens automatically when exiting the context managers
     print("✓ MCP server shutdown")
@@ -229,14 +261,9 @@ def get_report(report_id: str):
 @app.post("/reports/match-analysis")
 async def generate_match_analysis(request: MatchAnalysisRequest, background_tasks: BackgroundTasks):
     """Generate a match analysis report for an upcoming game."""
-    # Get MCP session and tools
-    mcp_session = app.state.mcp_session
-    tools = (await mcp_session.list_tools()).tools
     
     # Step 1: Run parallel research agents
     research_findings = await orchestrator.generate_research(
-        mcp_session, 
-        tools,
         team1=request.team1,
         team2=request.team2,
         game_date=request.game_date
@@ -244,8 +271,6 @@ async def generate_match_analysis(request: MatchAnalysisRequest, background_task
     
     # Step 2: Writer agent creates editorial from research
     report_content = await orchestrator.write_editorial(
-        mcp_session,
-        tools,
         research_findings,
         team1=request.team1,
         team2=request.team2,

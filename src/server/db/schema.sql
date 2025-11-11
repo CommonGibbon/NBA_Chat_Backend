@@ -42,4 +42,3 @@ CREATE INDEX idx_reports_teams_date ON match_analysis_reports(team1, team2, game
 INSERT INTO users (id, username, api_key) VALUES 
 ('97428650-14f8-4a83-aeb3-ef79f6929828', 'Will', 'willshannon89@gmail.com'),
 ('c25d9704-17d5-4d45-b1be-bf321cfcbcce', 'Doug', 'dougshannon@mac.com'),
-('ec123804-070c-4bd2-8b05-11bd721e7796', 'Dave', 'dave_blum@hotmail.com');

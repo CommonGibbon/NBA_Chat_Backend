@@ -37,6 +37,7 @@ def get_tools_by_category(categories: List[str]) -> List[str]:
             playoff - Playoff-specific data
             season - Season schedules and IST standings
     """
+
     requested = {c.lower().strip() for c in categories}
     invalid = requested - ALLOWED
     if invalid:
@@ -74,13 +75,14 @@ def get_current_season() -> str:
         return f"{year - 1}-{str(year)[-2:]}"
     
 
+
 @mcp.tool(meta = {"category": ['player']})
 def get_player_name_from_id(player_id: str) -> str:
     """Get player name from player_id."""
     return commonplayerinfo.CommonPlayerInfo(player_id=player_id).common_player_info.get_data_frame().DISPLAY_FIRST_LAST.values[0]
 
 @mcp.tool(meta={"category": ['team']})
-def get_team_name_from_if(team_id: str) -> str:
+def get_team_name_from_id(team_id: str) -> str:
     """Get team name from team_id."""
     return teamdetails.TeamDetails(team_id=team_id).team_background.get_data_frame().ABBREVIATION.values[0]
 
@@ -2223,11 +2225,8 @@ def get_video_status(game_date: str) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
-
-    
 if __name__ == "__main__":
     mcp.run()
-
 
 """
 DROPPED ENDPOINTS:
