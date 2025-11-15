@@ -747,7 +747,7 @@ def get_playoff_series(
     GAME_ID, HOME_TEAM_ID, VISITOR_TEAM_ID, SERIES_ID, GAME_NUM
     
     Args:
-        season: NBA season. If None, uses current season.
+        season: NBA season (e.g., "2023-24"). If None, uses current season.
     
     """
     """
@@ -776,11 +776,13 @@ def get_team_roster(
     season: Optional[str] = None
 ) -> str:
     """
-    Get team roster for a specific season.
+    Get team roster and coach information for a specific season.
+    Coach data returned: TEAM_ID, SEASON, COACH_ID, FIRST_NAME, LAST_NAME, COACH_NAME, IS_ASSISTANT, COACH_TYPE, SORT_SEQUENCE
+    Team data returned: TeamID, SEASON, LeagueID, PLAYER, PLAYER_SLUG, NUM, POSITION, HEIGHT, WEIGHT, BIRTH_DATE, AGE, EXP, SCHOOL, PLAYER_ID
     
     Args:
         team_name: Team name or abbreviation (e.g., "Lakers" or "LAL").
-        season: NBA season. If None, uses current season.
+        season: NBA season (e.g., "2023-24"). If None, uses current season.
     
     """
     """
@@ -814,19 +816,23 @@ def get_team_roster(
 
 
 @mcp.tool(meta={"category": ['player', 'statistics']})
-def get_cumulative_player_stats(
+def get_player_stats_by_game(
     player_name: str,
-    game_ids: str,
+    game_id: str,
     season: Optional[str] = None,
     season_type: str = "Regular Season"
 ) -> str:
     """
-    Get cumulative player stats across specified games.
+    Get cumulative player stats for specified game
+    Data returned: GP, GS, ACTUAL_MINUTES,
+       ACTUAL_SECONDS, FG, FGA, FG_PCT, FG3, FG3A, FG3_PCT, FT,
+       FTA, FT_PCT, OFF_REB, DEF_REB, TOT_REB, AVG_TOT_REB, AST,
+       PF, DQ, STL, TURNOVERS, BLK, PTS, AVG_PTS
     
     Args:
         player_name: Player's full name.
-        game_ids: Game IDs separated by commas (e.g., "0021700807,0021700808").  game_ids can be obtained using the get_league_game_finder tool call
-        season: NBA season. If None, uses current season.
+        game_ids: Game ID (e.g., "0021700807).  game_ids can be obtained using the get_league_game_finder tool call
+        season: NBA season (e.g., "2023-24"). If None, uses current season.
         season_type: "Regular Season", "Playoffs", "All Star", "Pre Season". Default: "Regular Season"
     
     """
@@ -844,76 +850,40 @@ def get_cumulative_player_stats(
         
         data = cumestatsplayer.CumeStatsPlayer(
             player_id=player_id,
-            game_ids=game_ids,
+            game_ids=[game_id],
             season=season,
             season_type_all_star=season_type,
             league_id="00"
         )
-        
-        result = f"# Cumulative Stats - {player_name}\n\n"
-        result += data.total_player_stats.get_data_frame().to_markdown(index=False) + "\n\n"
-        
-        return result
+        df = data.total_player_stats.get_data_frame()
+        if not len(df):
+            return f"No data found for player '{player_name}' in game {game_id}."
+        else:
+            result = f"# Player game Stats - {player_name}\n\n"
+            result += df.to_markdown(index=False) + "\n\n"
+                
+            return result
         
     except Exception as e:
         return f"Error retrieving cumulative stats for {player_name}: {str(e)}"
 
-
-@mcp.tool(meta={"category": ['player', 'statistics', 'game']})
-def get_cumulative_player_game_stats(
-    player_name: str,
-    season: Optional[str] = None,
-    season_type: str = "Regular Season"
-) -> str:
-    """
-    Get cumulative game-by-game stats for a player's entire season.
-    
-    Args:
-        player_name: Player's full name.
-        season: NBA season. If None, uses current season.
-        season_type: "Regular Season", "Playoffs", "All Star", "Pre Season". Default: "Regular Season"
-    
-    """
-    """
-    Hidden Parameters:
-    - league_id: League ID ("00" for NBA).
-    """
-    try:
-        player_id = find_player_id(player_name)
-        if player_id is None:
-            return f"Player '{player_name}' not found."
-        
-        if season is None:
-            season = get_current_season()
-        
-        data = cumestatsplayergames.CumeStatsPlayerGames(
-            player_id=player_id,
-            season=season,
-            season_type_all_star=season_type,
-            league_id="00"
-        )
-        
-        df = data.cumulative_player_stats.get_data_frame()
-        return f"# Season Game-by-Game Cumulative Stats - {player_name} ({season})\n\n" + df.to_markdown(index=False)
-        
-    except Exception as e:
-        return f"Error retrieving cumulative game stats for {player_name}: {str(e)}"
-
-
 @mcp.tool(meta={"category": ['team', 'statistics']})
 def get_cumulative_team_stats(
     team_name: str,
-    game_ids: str,
+    game_id: str,
     season: Optional[str] = None,
     season_type: str = "Regular Season"
 ) -> str:
     """
-    Get cumulative team stats across specified games.
+    Get cumulative team stats across specified games. Data returned: 
+    CITY, NICKNAME, TEAM_ID, W, L, W_HOME, L_HOME, W_ROAD, L_ROAD, TEAM_TURNOVERS, TEAM_REBOUNDS, GP, GS, ACTUAL_MINUTES, 
+    ACTUAL_SECONDS, FG, FGA, FG_PCT, FG3, FG3A, FG3_PCT, FT, FTA, FT_PCT, OFF_REB, DEF_REB, TOT_REB, AST, PF, STL, 
+    TOTAL_TURNOVERS, BLK, PTS, AVG_REB, AVG_PTS, DQ
     
     Args:
-        team_name: Team name or abbreviation.
-        game_ids: Game IDs separated by commas (e.g., "0021700807,0021700808").  game_ids can be obtained using the get_league_game_finder tool call
-        season: NBA season. If None, uses current season.
+        team_name: Team name or abbreviation (e.g., "Lakers" or "LAL").
+        game_id: Game ID (e.g., "0021700807).  game_ids can be obtained using the get_league_game_finder tool call
+        season: season: NBA season (e.g., "2023-24"). If None, uses current season.
         season_type: "Regular Season", "Playoffs", "All Star", "Pre Season". Default: "Regular Season"
     
     """
@@ -931,63 +901,22 @@ def get_cumulative_team_stats(
         
         data = cumestatsteam.CumeStatsTeam(
             team_id=team_id,
-            game_ids=game_ids,
+            game_ids=[game_id],
             season=season,
             season_type_all_star=season_type,
             league_id="00"
         )
-        
-        result = f"# Cumulative Team Stats - {team_name}\n\n"
-        result += "## Game by Game\n"
-        result += data.game_by_game_stats.get_data_frame().to_markdown(index=False) + "\n\n"
-        result += "## Totals\n"
-        result += data.total_team_stats.get_data_frame().to_markdown(index=False) + "\n\n"
-        
-        return result
+        df = data.total_team_stats.get_data_frame()
+        if not len(df):
+            return f"No data found for team '{team_name}' in game {game_id}."
+        else:
+            result = f"# Team Stats for game - {team_name}\n\n"
+            result += df.to_markdown(index=False) + "\n\n"
+            
+            return result
         
     except Exception as e:
         return f"Error retrieving cumulative team stats for {team_name}: {str(e)}"
-
-
-@mcp.tool(meta={"category": ['team', 'statistics', 'game']})
-def get_cumulative_team_game_stats(
-    team_name: str,
-    season: Optional[str] = None,
-    season_type: str = "Regular Season"
-) -> str:
-    """
-    Get cumulative game-by-game stats for a team's entire season.
-    
-    Args:
-        team_name: Team name or abbreviation.
-        season: NBA season. If None, uses current season.
-        season_type: "Regular Season", "Playoffs", "All Star", "Pre Season". Default: "Regular Season"
-    
-    """
-    """
-    Hidden Parameters:
-    - league_id: League ID ("00" for NBA).
-    """
-    try:
-        team_id = find_team_id(team_name)
-        if team_id is None:
-            return f"Team '{team_name}' not found."
-        
-        if season is None:
-            season = get_current_season()
-        
-        data = cumestatsteamgames.CumeStatsTeamGames(
-            team_id=team_id,
-            season=season,
-            season_type_all_star=season_type,
-            league_id="00"
-        )
-        
-        df = data.cumulative_team_stats.get_data_frame()
-        return f"# Season Game-by-Game Cumulative Team Stats - {team_name} ({season})\n\n" + df.to_markdown(index=False)
-        
-    except Exception as e:
-        return f"Error retrieving cumulative team game stats for {team_name}: {str(e)}"
 
 
 @mcp.tool(meta={"category": ['league', 'statistics']})
@@ -1275,7 +1204,7 @@ def get_franchise_history(team_name: str) -> str:
     Accepts team name and converts to ID internally.
     
     Args:
-        team_name: Team name or abbreviation.
+        team_name: Team name or abbreviation (e.g., "Lakers" or "LAL")..
     
     """
     """
@@ -1299,9 +1228,6 @@ def get_franchise_history(team_name: str) -> str:
         return f"Error retrieving franchise history for {team_name}: {str(e)}"
 
 
-# ============================================================================
-# REMAINING ENDPOINTS (97 tools)
-# ============================================================================
 
 @mcp.tool(meta={"category": ['franchise', 'team', 'historical']})
 def get_franchise_leaders(team_name: str, per_mode: str = "PerGame") -> str:
@@ -1309,7 +1235,7 @@ def get_franchise_leaders(team_name: str, per_mode: str = "PerGame") -> str:
     Get franchise all-time leaders. Accepts team name.
     
     Args:
-        team_name: Team name.
+        team_name: Team name or abbreviation (e.g., "Lakers" or "LAL").
         per_mode: Per mode.
     
     """
@@ -1333,7 +1259,7 @@ def get_franchise_players(team_name: str, per_mode: str = "PerGame") -> str:
     Get all players in franchise history. Accepts team name.
     
     Args:
-        team_name: Team name.
+        team_name: Team name or abbreviation (e.g., "Lakers" or "LAL").
         per_mode: Per mode.
     
     """
@@ -1502,6 +1428,7 @@ def get_league_dash_player_stats(
 
 @mcp.tool(meta={"category": ['league', 'team', 'statistics']})
 def get_league_dash_team_stats(
+    team_name: str,
     season: Optional[str] = None,
     season_type: str = "Regular Season",
     per_mode: str = "PerGame",
@@ -1509,8 +1436,13 @@ def get_league_dash_team_stats(
 ) -> str:
     """
     Get league dashboard team stats.
+    Date returned: TEAM_ID, TEAM_NAME, GP, W, L, W_PCT, MIN, FGM, FGA, FG_PCT, FG3M, FG3A, FG3_PCT, FTM, FTA, FT_PCT, OREB, DREB, REB, 
+    AST, TOV, STL, BLK, BLKA, PF, PFD, PTS, PLUS_MINUS, GP_RANK, W_RANK, L_RANK, W_PCT_RANK, MIN_RANK, FGM_RANK, FGA_RANK, FG_PCT_RANK, 
+    FG3M_RANK, FG3A_RANK, FG3_PCT_RANK, FTM_RANK, FTA_RANK, FT_PCT_RANK, OREB_RANK, DREB_RANK, REB_RANK, AST_RANK, TOV_RANK, STL_RANK, 
+    BLK_RANK, BLKA_RANK, PF_RANK, PFD_RANK, PTS_RANK, PLUS_MINUS_RANK, CFID, CFPARAMS
     
     Args:
+        team_name: Team name or abbreviation (e.g., "Lakers" or "LAL").
         season: Season.
         season_type: Season type.
         per_mode: Per mode.
@@ -1522,6 +1454,9 @@ def get_league_dash_team_stats(
     - league_id: League ID ("00" for NBA).
     """
     try:
+        team_id = find_team_id(team_name)
+        if not team_id:
+            return f"Team '{team_name}' not found."
         if not season:
             season = get_current_season()
         data = leaguedashteamstats.LeagueDashTeamStats(
@@ -2231,6 +2166,7 @@ if __name__ == "__main__":
 """
 DROPPED ENDPOINTS:
 teamgamelog.TeamGameLog - I tried a few variations of this on 11/4/25 and all of them returned empty dataframes
+cumestatsteam.CumeStatsTeam - This only returns the date of the game and the game id, no stats
 
 
 """
