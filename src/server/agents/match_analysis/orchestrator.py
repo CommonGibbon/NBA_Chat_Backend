@@ -86,7 +86,7 @@ async def execute_agent(app_name, agent, user_message):
             for part in event.content.parts:  
                 if part.text:  
                     results.append((event.author, part.text))
-    return results, results[-1][1] 
+    return results, results[-2][1] # the last response will always be from the critic, so our actual final result is the second to last message
 
 
 class ResearchLoop():
@@ -170,32 +170,39 @@ async def generate_research(team1: str, team2: str, game_date: str) -> Dict[str,
     # return the joined agent and function results
     return {**agent_results, **function_results} 
 
-async def write_editorial(research_findings: Dict[str, str], team1: str, team2: str, game_date: str) -> str:
-    
+async def write_editorial(team1: str, team2: str, game_date: str) -> str:
+    """
+    This function needs serious rework:
+    1. We are re-defining the same critic repeatedly because it cannot be re-used under different parent loopagents
+    2. We have config files, but we're hard-coding specific actions here 
+    3. The formula of the derivation of these loopagents is similar enough that we should be able to reduce code duplication
+    4. I'm referecing .llm_actions[0] for every system prompt, which is clearly wrong
+    """
+    print("STARTING RESEARCH")
     research_findings = await generate_research(team1, team2, game_date)
-
-    critic = Agent(
-        name=writing_configs.critic.name,
-        model=writing_configs.critic.model,
-        instruction=writing_configs.critic.system_prompt,
-        output_key="critique"
-    )
-
+    print("RESEARCH COMPLETE")
     ################
     # Analyze match outcome
     match_analyst = Agent(
         name = analyst_configs.match_prediction_analyst.name,
         model = analyst_configs.match_prediction_analyst.model,
-        instructions = create_instructions_provider(
+        instruction = create_instructions_provider(
             trigger_key = "critique",
             trigger_found_instructions="Additional research required: {critique}",
-            trigger_absent_instructions=analyst_configs.match_prediction_analyst.system_prompt
+            trigger_absent_instructions=analyst_configs.match_prediction_analyst.llm_actions[0].system_prompt
         )
+    )
+
+    match_analysis_critic = Agent(
+        name="match_analysis_" + writing_configs.critic.name,
+        model=writing_configs.critic.model,
+        instruction=writing_configs.critic.llm_actions[0].system_prompt,
+        output_key="critique"
     )
 
     match_analysis_loop = LoopAgent(
         name=f"match_analysis_loop_agent",
-        sub_agents=[match_analyst, critic],
+        sub_agents=[match_analyst, match_analysis_critic],
         max_iterations=3
     )
 
@@ -210,7 +217,7 @@ async def write_editorial(research_findings: Dict[str, str], team1: str, team2: 
             Team performance: \n {research_findings['team_performance']}\n\n
             Player performance: \n {research_findings['player_performance']}\n\n
             Player activity status: \n {research_findings['inactive_players']}\n\n
-            Match odds according to betting sites: \n {research_findings['odds']}\n\n                                               
+            Match odds according to betting sites: \n {research_findings['odds']}\n\n                                    
             """)]  
     ) 
     ################
@@ -218,16 +225,23 @@ async def write_editorial(research_findings: Dict[str, str], team1: str, team2: 
     fan_narrative_analyst = Agent(
         name = analyst_configs.fan_narrative_analyst.name,
         model = analyst_configs.fan_narrative_analyst.model,
-        instructions = create_instructions_provider(
+        instruction = create_instructions_provider(
             trigger_key = "critique",
             trigger_found_instructions="Additional research required: {critique}",
-            trigger_absent_instructions=analyst_configs.fan_narrative_analyst.system_prompt
+            trigger_absent_instructions=analyst_configs.fan_narrative_analyst.llm_actions[0].system_prompt
         )
+    )
+
+    fan_narrative_critic = Agent(
+        name="fan_narrative_" + writing_configs.critic.name,
+        model=writing_configs.critic.model,
+        instruction=writing_configs.critic.llm_actions[0].system_prompt,
+        output_key="critique"
     )
 
     fan_narrative_loop = LoopAgent(
         name=f"fan_narrative_loop_agent",
-        sub_agents=[fan_narrative_analyst, critic],
+        sub_agents=[fan_narrative_analyst, fan_narrative_critic],
         max_iterations=3
     )
 
@@ -242,96 +256,51 @@ async def write_editorial(research_findings: Dict[str, str], team1: str, team2: 
             """)]  
     ) 
     ################
-    # Rivalry Analyst
-    rivalry_analyst = Agent(
-        name = analyst_configs.rivalry_analyst.name,
-        model = analyst_configs.rivalry_analyst.model,
-        instructions = create_instructions_provider(
-            trigger_key = "critique",
-            trigger_found_instructions="Additional research required: {critique}",
-            trigger_absent_instructions=analyst_configs.rivalry_analyst.system_prompt
-        )
-    )
-
-    rivalry_loop = LoopAgent(
-        name=f"rivalry_loop_agent",
-        sub_agents=[rivalry_analyst, critic],
-        max_iterations=3
-    )
-
-    user_message_rivalry = types.Content(  
-        role='user',  
-        parts=[types.Part.from_text(text=f"""
-            You are analyzing the rivalry between {team1} and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}
-            You have access to the the following data:  
-            Rivalry: \n {research_findings['rivalry']}
-            """)]  
-    ) 
-
+    # Execute the analysis loops
+    print("STARTING ANALYSIS")
+    res = await asyncio.gather(*[execute_agent(match_analysis_loop.name, match_analysis_loop, user_message_match_analysis),
+                                 execute_agent(fan_narrative_loop.name, fan_narrative_loop, user_message_fan_narrative)])
+    match_analysis_res, fan_narrative_res = res # unpack the results
+    _, match_analysis_res = match_analysis_res
+    _, fan_narrative_res = fan_narrative_res
+    print("ANALYSIS COMPLETE")
     ################
-
-
-
-
-
-
-    # The code below hard codes the data we expect to get from the research_findings, but this defeats the 
-    # purpose of our config.py files, which are intended to be the flexible one source of truth on what data gets processed
-    # by each LLM. I think the the solution to this will involve converting this prompt into a config style as well. 
-    user_message = types.Content(  
-        role='user',  
-        parts=[types.Part.from_text(text=f"""
-            You are analyzing the likely outcome of the game between {team1} (your team) and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}
-            You have access to the the following data:  
-            Team performance: \n {research_findings['team_performance']}\n\n
-            Player performance: \n {research_findings['player_performance']}\n\n
-            Player activity status: \n {research_findings['inactive_players']}\n\n
-            Match odds according to betting sites: \n {research_findings['odds']}\n\n                                               
-            """)]  
-    ) 
-
-
-
-
+    # Write the final editorial
     writer = Agent(
         name=writing_configs.writer.name,
         model=writing_configs.writer.model,
         instruction=create_instructions_provider(
             trigger_key = "critique",
             trigger_found_instructions="Additional research required: {critique}",
-            trigger_absent_instructions=writing_configs.writer.system_prompt
+            trigger_absent_instructions=writing_configs.writer.llm_actions[0].system_prompt
         )
     )
 
-    
+    writing_critic = Agent(
+        name="writing_" + writing_configs.critic.name,
+        model=writing_configs.critic.model,
+        instruction=writing_configs.critic.llm_actions[0].system_prompt,
+        output_key="critique"
+    )
 
-    root_agent = LoopAgent(
+    writer_loop = LoopAgent(
         name=f"editorial_loop_agent",
-        sub_agents=[writer, critic],
+        sub_agents=[writer, writing_critic],
         max_iterations=3
     )
 
-    app_name = f"editorial_loop"
-    runner = InMemoryRunner(agent = root_agent, app_name = app_name)
-    session = await runner.session_service.create_session(
-        app_name=app_name,
-        user_id=user_id,
-        state = {"critique": ""} # initialize critique as empty for the first iteration.
+    user_message_writer = types.Content(  
+        role='user',  
+        parts=[types.Part.from_text(text=f"""
+            You are to write an editorial on the upcoming game between {team1} (your team) and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}
+            You have access to the the following data:  
+            Matchup Analysis: \n {match_analysis_res}\n\n
+            Fan narrative: \n {fan_narrative_res}\n\n
+            Team Rivalry/Drama: \n {research_findings['rivalry']}\n\n
+            """)]  
     )
 
-    user_message = types.Content(  
-        role='user',  
-        parts=[types.Part.from_text(text=f"You are to write an editorial on the upcoming game between {team1} (your team) and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}")]  
-    )  
-
-    results = []
-    async for event in runner.run_async(  
-        user_id=user_id,  
-        session_id=session.id,  
-        new_message=user_message  
-    ):  
-        if event.content and event.content.parts:  
-            for part in event.content.parts:  
-                if part.text:  
-                    results.append((event.author, part.text))
-    return results[-1][1] # just return the last message
+    print("STARTING WRITING")
+    _, writer_results = await execute_agent(writer_loop.name, writer_loop, user_message_writer)
+    print("WRITING COMPLETE")
+    return writer_results

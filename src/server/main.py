@@ -262,22 +262,14 @@ def get_report(report_id: str):
 async def generate_match_analysis(request: MatchAnalysisRequest, background_tasks: BackgroundTasks):
     """Generate a match analysis report for an upcoming game."""
     
-    # Step 1: Run parallel research agents
-    research_findings = await orchestrator.generate_research(
-        team1=request.team1,
-        team2=request.team2,
-        game_date=request.game_date
-    )
-    
-    # Step 2: Writer agent creates editorial from research
+    # Step 1: Conduct research  -> Writer agent creates editorial from research
     report_content = await orchestrator.write_editorial(
-        research_findings,
         team1=request.team1,
         team2=request.team2,
         game_date=request.game_date
     )
     
-    # Step 3: Save to database
+    # Step 2: Save to database
     report_id = create_match_analysis_report(
         team1=request.team1,
         team2=request.team2,

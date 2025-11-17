@@ -36,7 +36,7 @@ match_prediction_analyst = agent_config(
     ]
 )
 
-match_prediction_analyst = agent_config(
+fan_narrative_analyst = agent_config(
     name="fan_narrative_analyst",
     model=MODEL,
     setup_actions=[],

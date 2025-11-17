@@ -6,22 +6,25 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 # The code in this file is meant to collect data which will be fed into an LLM process. The principle is,
 # rather than letting the LLM figure out how to make the correct sequence of API calls, we'll make them for it (when feasible).
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+# Define wait parameters for retrying nba API calls
+wait_mult = 2
+wait_min = 4
+wait_max = 30
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max))
 def _get_box_advanced(game_id, team_id, columns, type):
     box_advanced = boxscoreadvancedv3.BoxScoreAdvancedV3(game_id=game_id)
     box_advanced = box_advanced.team_stats.get_data_frame() if type == "T" else box_advanced.player_stats.get_data_frame()
     box_advanced = box_advanced[box_advanced['teamId'] == team_id]
     return box_advanced[columns]
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max))
 def _get_box_traditional(game_id, team_id, columns, type):
     box_traditional = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id)
     box_traditional = box_traditional.team_stats.get_data_frame() if type == "T" else box_traditional.player_stats.get_data_frame()
     box_traditional = box_traditional[box_traditional['teamId'] == team_id]
     return box_traditional[columns]
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max))
 def _get_game_record(team_id: str):
     #Get all the games in the current season for the designated team
     data = leaguegamefinder.LeagueGameFinder(
