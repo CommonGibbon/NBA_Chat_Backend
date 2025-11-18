@@ -1,3 +1,4 @@
+# Research configs are built to collect data either through api calls or google seaches. They do not perform any data reduction, summarization, or analysis.
 from .models import agent_config, llm_action, function_config
 from .data_preprocessing import get_team_performance, get_player_performance, get_matchup_history
 from google.genai import types

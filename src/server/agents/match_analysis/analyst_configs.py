@@ -1,6 +1,8 @@
+# Analyst configs are built to receive, process, and reduce data to critical insights. These agents will reduce the cognitive load on the writing agent
 from .models import agent_config, llm_action
 from google.genai import types
 from google.adk.models.google_llm import Gemini
+from .data_preprocessing import get_team_schedule
 
 # calls to api can error out for various reasons, such as rate limiting
 retry_config = types.HttpRetryOptions(
@@ -11,6 +13,23 @@ retry_config = types.HttpRetryOptions(
 )
 
 MODEL=Gemini(model="gemini-2.5-pro", retry_options=retry_config)
+
+schedule_analyst = agent_config(
+    name="schedule_analyst",
+    model=Gemini(model="gemini-2.5-flash", retry_options=retry_config),
+    setup_actions=[get_team_schedule],
+    llm_actions=[
+        llm_action(
+            system_prompt="""
+            You are an expert NBA analyst. You will be provided with a team's schedule over the last seven days, including:
+            game dates, days since previous game, win/loss, points scored, plus/minus, opposing team, and locations.
+            Provide a concise 4-5 sentence analysis of schedule difficulty, focusing on rest patterns and travel demands.
+            Highlight the most challenging aspects and any scheduling advantages.
+            """,
+            tools=[]
+        )
+    ]
+)
 
 match_prediction_analyst = agent_config(
     name="match_prediction_analyst",

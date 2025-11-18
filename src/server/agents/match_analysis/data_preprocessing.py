@@ -3,13 +3,14 @@ import numpy as np
 from nba_api.stats.endpoints import leaguegamefinder, boxscoretraditionalv3, boxscoreadvancedv3
 from nba_mcp_server.mcp_server import get_current_season, find_team_id
 from tenacity import retry, stop_after_attempt, wait_exponential
+from datetime import datetime, timedelta
 
 # The code in this file is meant to collect data which will be fed into an LLM process. The principle is,
 # rather than letting the LLM figure out how to make the correct sequence of API calls, we'll make them for it (when feasible).
 # Define wait parameters for retrying nba API calls
-wait_mult = 2
+wait_mult = 3
 wait_min = 4
-wait_max = 30
+wait_max = 45
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max))
 def _get_box_advanced(game_id, team_id, columns, type):
     box_advanced = boxscoreadvancedv3.BoxScoreAdvancedV3(game_id=game_id)
@@ -173,8 +174,6 @@ def get_player_performance(team1: str, team2: str):
 
     return output   
 
-
-
 def get_matchup_history(team1: str, team2: str):
     team1_id = find_team_id(team1)
     if team1_id is None:
@@ -208,3 +207,87 @@ def get_matchup_history(team1: str, team2: str):
     losses = (matchups['WL'] == 'L').sum()
 
     return f"{team1} vs {team2}: {wins} wins, {losses} losses"
+
+# Mapping team name to team location, this is used in get_team_schedule.
+# We should probably build in automatic updates for this. 
+team_locations = {
+    "ATL": "Georgia",
+    "BOS": "Massachusetts", 
+    "BKN": "New York",
+    "CHA": "North Carolina",
+    "CHI": "Illinois",
+    "CLE": "Ohio",
+    "DAL": "Texas",
+    "DEN": "Colorado",
+    "DET": "Michigan",
+    "GSW": "California",
+    "HOU": "Texas",
+    "IND": "Indiana",
+    "LAC": "California",
+    "LAL": "California", 
+    "MEM": "Tennessee",
+    "MIA": "Florida",
+    "MIL": "Wisconsin",
+    "MIN": "Minnesota",
+    "NOP": "Louisiana",
+    "NYK": "New York",
+    "OKC": "Oklahoma",
+    "ORL": "Florida",
+    "PHI": "Pennsylvania",
+    "PHX": "Arizona",
+    "POR": "Oregon",
+    "SAC": "California",
+    "SAS": "Texas",
+    "TOR": "Ontario",
+    "UTA": "Utah",
+    "WAS": "Washington D.C."
+}
+
+def get_team_schedule(team1):
+    # get all the games played in the last 7 days + rest days + location. This is used for schedule difficulty analysis
+    team_id = find_team_id(team1)
+    if team_id is None:
+        raise ValueError(f"Team {team1} not found.")
+    # pull a record of all the games played by the target team this season
+    game_record = _get_game_record(team_id)
+
+    # Convert dates and sort by date
+    game_record['GAME_DATE'] = pd.to_datetime(game_record['GAME_DATE'])
+    game_record = game_record.sort_values('GAME_DATE')
+
+    # Calculate days since previous game for ALL games
+    game_record['rest_days'] = game_record['GAME_DATE'].diff().dt.days.fillna(0)
+
+    # Parse matchups and determine locations
+    def parse_matchup(matchup):
+        if '@' in matchup:
+            team, vs_team = matchup.split(' @ ')
+            location = team_locations[vs_team]  # Away game at opponent's location
+        else:
+            team, vs_team = matchup.split(' vs. ')
+            location = team_locations[team]     # Home game at our location
+        return location
+
+    # Extract opponent team code
+    def extract_opponent(matchup):
+        if '@' in matchup:
+            team, vs_team = matchup.split(' @ ')
+        else:
+            team, vs_team = matchup.split(' vs. ')
+        return vs_team
+
+    game_record['game_location'] = game_record['MATCHUP'].apply(parse_matchup)
+    game_record['opponent'] = game_record['MATCHUP'].apply(extract_opponent)
+
+    # Filter to last 7 days
+    today = datetime.now().date()
+    week_ago = today - timedelta(days=7)
+    recent_games = game_record[(game_record['GAME_DATE'].dt.date >= week_ago) & 
+                            (game_record['GAME_DATE'].dt.date <= today)]
+
+    # Final report - sorted descending (most recent first)
+    report = recent_games[['GAME_DATE', 'rest_days', 'game_location', 'opponent', 'WL', 'PTS', 'PLUS_MINUS']].copy()
+    report.rename(columns={'WL': 'result', 'PTS': 'points'}, inplace=True)
+    report['GAME_DATE'] = report['GAME_DATE'].dt.strftime('%Y-%m-%d')
+    report = report.sort_values('GAME_DATE', ascending=False)
+    return "Games over the last seven days: \n\n" + report.to_markdown(index=False)

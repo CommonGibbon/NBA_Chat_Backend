@@ -181,6 +181,26 @@ async def write_editorial(team1: str, team2: str, game_date: str) -> str:
     print("STARTING RESEARCH")
     research_findings = await generate_research(team1, team2, game_date)
     print("RESEARCH COMPLETE")
+
+    analyst_base_prompt = f"You are analyzing the likely outcome of the game between {team1} (your team) and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}"
+    ################
+    # Analyse schedule difficulty
+    # Unlike most other agents, I dont' think we need a critique loop here
+    schedule_analyst = Agent(
+        name = analyst_configs.schedule_analyst.name,
+        mode = analyst_configs.schedule_analyst.model,
+        instruction = analyst_configs.schedule_analyst.llm_actions[0].system_prompt
+    )
+
+    user_message_schedule_analysis = types.Content(  
+        role='user',  
+        parts=[types.Part.from_text(text=analyst_base_prompt)]  
+    ) 
+    # PROBLEM:
+    # the results of this analysis are required for use in the match analysis agent, so I need to execute here. The problem is that its not done in parallel, so
+    # it slows down the entire report generation for a single prompt + response. This is another symptom of my currently suboptimal architecture.
+    _, schedule_analysis_results = await execute_agent(schedule_analyst.name, schedule_analyst, user_message_schedule_analysis)
+
     ################
     # Analyze match outcome
     match_analyst = Agent(
@@ -212,12 +232,13 @@ async def write_editorial(team1: str, team2: str, game_date: str) -> str:
     user_message_match_analysis = types.Content(  
         role='user',  
         parts=[types.Part.from_text(text=f"""
-            You are analyzing the likely outcome of the game between {team1} (your team) and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}
+            {analyst_base_prompt}
             You have access to the the following data:  
             Team performance: \n {research_findings['team_performance']}\n\n
             Player performance: \n {research_findings['player_performance']}\n\n
             Player activity status: \n {research_findings['inactive_players']}\n\n
-            Match odds according to betting sites: \n {research_findings['odds']}\n\n                                    
+            Match odds according to betting sites: \n {research_findings['odds']}\n\n
+            Schedule analysis: \n {schedule_analysis_results}\n\n
             """)]  
     ) 
     ################
@@ -248,11 +269,12 @@ async def write_editorial(team1: str, team2: str, game_date: str) -> str:
     user_message_fan_narrative = types.Content(  
         role='user',  
         parts=[types.Part.from_text(text=f"""
-            You are analyzing the game between {team1} (your team) and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}
+            {analyst_base_prompt}
             You have access to the the following data:  
             Team performance: \n {research_findings['team_performance']}\n\n
             Player performance: \n {research_findings['player_performance']}\n\n
-            Player activity status: \n {research_findings['inactive_players']}\n\n                                              
+            Player activity status: \n {research_findings['inactive_players']}\n\n 
+            Schedule analysis: \n {schedule_analysis_results}\n\n                                            
             """)]  
     ) 
     ################
