@@ -2,15 +2,9 @@
 from .models import agent_config, function_config
 from .data_preprocessing import get_team_performance, get_player_performance, get_matchup_history, get_team_schedule
 from google.genai import types
-from google.adk.tools import google_search, FunctionTool
+from google.adk.tools import google_search, FunctionTool, exit_loop_tool
 from google.adk.models.google_llm import Gemini
 from typing import Dict
-
-# utility function for critic agents
-def exit_loop() -> Dict[str, str]:  
-    """Call this function ONLY when the results are approved, indicating the work is finished and no more changes are needed."""  
-    return {"status": "approved", "message": "Work approved. Exiting refinement loop."}
-
 
 # Calls to api can error out for various reasons, such as rate limiting
 retry_config = types.HttpRetryOptions(
@@ -193,15 +187,34 @@ research_critic_agent = agent_config(
     name="research_critic",
     model=FAST_MODEL,
     system_prompt="""
-    Your job is to review the original assigned task and assess whether the research is complete, or if further investigation is needed.
-    - If the research is complete, you MUST call the exit_loop function to indicate that no further research is needed.
-    - Otherwise, provide specific, actionable suggestions for improvement.
-    """,
-    tools=[FunctionTool(exit_loop)]
-)
+    Your job is to review the original assigned task and assess whether the task is complete, or if further investigation is needed.
 
-article_min_length = 1000
-article_max_length = 2000
+    Current task output: {output}
+
+    **YOUR ONLY CRITERIA: Task Completion Assessment**
+    - Evaluate if the task instructions have been fully satisfied
+    - Check if all required components are present
+    - Determine if the scope matches what was requested
+
+    **STRICTLY PROHIBITED - DO NOT:**
+    - Comment on factual accuracy of any information
+    - Question or verify facts, data, statistics, or claims
+    - Suggest factual corrections or additions
+    - Evaluate the quality or reliability of sources
+    - Make any observations about content truthfulness
+
+    **REQUIRED RESPONSE:**
+    - If task is complete → call exit_loop function
+    - If incomplete → provide specific suggestions for completing the task instructions only
+
+    **EXAMPLE OF PROPER FOCUS:**
+    - ✅ "The task asked for 3 examples but only provided 2"
+    - ❌ "The statistic about population growth seems incorrect"
+
+    Assume ALL factual content is accurate and focus solely on task completion.
+    """,
+    tools=[exit_loop_tool.exit_loop]
+)
 
 writer_agent = agent_config(
     name="writer",
@@ -211,7 +224,7 @@ writer_agent = agent_config(
         fan_narrative_agent,
         rivalry_agent
     ],
-    system_prompt=f"""
+    system_prompt="""
         ## Role
 
         You are the **Lead Writer & Game Predictor** for a pre-game article written from **team_1’s perspective**. You are given **structured analysis content** to work with:
@@ -245,7 +258,7 @@ writer_agent = agent_config(
 
         ## Formatting Requirements
 
-        - **Output**: Markdown article only, **{article_min_length}–{article_max_length} words**.
+        - **Output**: Markdown article only, **1000-2000 words**.
         - Use **H2/H3 headers**, **bold** key phrases, **short paragraphs**, and **bulleted lists** where helpful.
         - **No sources section**, no URLs, no citations.
 
@@ -383,8 +396,11 @@ writer_agent = agent_config(
 writer_critic_agent = agent_config(
     name="writer_critic",
     model=PRO_MODEL,
-    system_prompt=f"""
-        Role: Critic/Editor. Review the writer’s markdown article (Team 1 perspective). Provide delivery critique only. Do not add facts or change numbers. Be concise and actionable.
+    system_prompt="""
+        Role: Critic/Editor. Review the writer’s markdown article (Team 1 perspective). Provide delivery critique only.
+        Focus only on form; assum all facts are correct and do not add facts or change numbers. Be concise and actionable.
+
+        Their current article is: {output}
 
         Objectives to enforce
         - Goals met: engaging, predictive-leaning baseline + “what flips the game,” Team_1 POV, no betting advice, no guarantees.
@@ -397,13 +413,13 @@ writer_critic_agent = agent_config(
 
         Output (Markdown only)
         1) Verdict: Pass or Needs Fixes (one line).
-        2) Compliance checklist: mark Pass/Fix for each: Goals, Structure, Team_1 POV, Length ({article_min_length}–{article_max_length}), Tone (no guarantees/bets), Small-sample notes.
+        2) Compliance checklist: mark Pass/Fix for each: Goals, Structure, Team_1 POV, Length (1000-2000 words), Tone (no guarantees/bets), Small-sample notes.
         3) Highest-impact edits (Top 5): for each, include issue, location (section/para), and a concrete rewrite snippet.
         4) Repetition/Cliché report: phrase → count → example → suggested alternative.
         5) Micro-edits: bullet list of tighteners (word swaps, cuts, transition tweaks).
 
-        If work is complete, you MUST call the exit_loop function to indicate that no further research is needed.
+        If work is complete, you MUST call the exit_loop function to indicate that no further work is needed.
         """,
-    tools=[FunctionTool(exit_loop)]
+    tools=[exit_loop_tool.exit_loop]
         
 )

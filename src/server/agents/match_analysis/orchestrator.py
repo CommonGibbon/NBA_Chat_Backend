@@ -56,15 +56,13 @@ async def execute_agent(app_name, agent, user_message):
             for part in event.content.parts:  
                 if part.text:  
                     results.append(part.text)
-    
-    # The last response will always be from the critic (approving), so our actual final result is the second to last message
-    if len(results) >= 2:
-        return results[-2]
-    elif results:
-        return results[-1]
-    else:
-        return "No response generated."
-
+    # return the final state of the output key
+    final_session = await runner.session_service.get_session(  
+        app_name=app_name,  
+        user_id=user_id,  
+        session_id=session.id  
+    )  
+    return final_session.state.get("output")
 
 # --- The Graph Engine ---
 
@@ -157,13 +155,14 @@ class GraphExecutor:
                 trigger_found_instructions="Additional work required: {critique}",
                 trigger_absent_instructions=cfg.system_prompt
             ),
+            output_key="output",
             tools=cfg.tools
         )
         # The Critic
         critic_agent = Agent(
             name=f"{cfg.name}_critic",
             model=critic_cfg.model,
-            instruction=critic_cfg.system_prompt,
+            instruction=f"Task instructions: {cfg.system_prompt}\n Your instructions: {critic_cfg.system_prompt}",
             output_key="critique",
             tools=critic_cfg.tools
         )
