@@ -8,3 +8,5 @@ MISSION.md
 notebooks/
 
 __pycache__/
+
+.DS_Store
