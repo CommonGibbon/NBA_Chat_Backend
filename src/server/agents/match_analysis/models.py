@@ -1,18 +1,20 @@
-from typing import List
+from typing import List, Any, Callable, Union
 
-class agent_config():
-    def __init__(self, name, model, setup_actions, llm_actions):
+class agent_config:
+    def __init__(self, 
+                 name: str, 
+                 model: Any, 
+                 system_prompt: str, 
+                 tools: List[Any] = None, 
+                 depends_on: List[Union['agent_config', 'function_config']] = None):
         self.name = name
         self.model = model
-        self.setup_actions = setup_actions # function calls which pull target data and feed it into the LLM
-        self.llm_actions = llm_actions
-
-class llm_action():
-    def __init__(self, system_prompt: str, tools: List[str] = []):
         self.system_prompt = system_prompt
-        self.tools = tools
+        self.tools = tools if tools is not None else []
+        self.depends_on = depends_on if depends_on is not None else []
 
 class function_config():
-    def __init__(self, name: str, function: callable):
+    def __init__(self, name: str, function: Callable):
         self.name = name
         self.function = function
+

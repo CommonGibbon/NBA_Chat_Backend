@@ -1,25 +1,17 @@
-from . import research_configs, writing_configs, analyst_configs
-from google.adk.agents import Agent, LoopAgent, SequentialAgent
-from google.adk.tools import FunctionTool
-from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
-from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
+from . import research_configs
+from .models import agent_config, function_config
+from google.adk.agents import Agent, LoopAgent
 from google.adk.runners import InMemoryRunner
 from google.genai import types
-from mcp import StdioServerParameters
-import sys
 import asyncio
-from typing import Dict, List
+from typing import Dict, Any, Union
 from dotenv import load_dotenv
 import datetime
 import inspect
+
 load_dotenv()
 
-user_id = "research_orchestrator" # this is used when running various agents
-
-# This is used by review agents to signal that a loop should exit
-def exit_loop() -> Dict[str, str]:  
-    """Call this function ONLY when the results are approved, indicating the work is finished and no more changes are needed."""  
-    return {"status": "approved", "message": "Work approved. Exiting refinement loop."}
+user_id = "research_orchestrator"
 
 def create_instructions_provider(trigger_key: str, trigger_found_instructions: str, trigger_absent_instructions: str):
     """
@@ -34,48 +26,26 @@ def create_instructions_provider(trigger_key: str, trigger_found_instructions: s
         return trigger_found_instructions if len(target) > 0 else trigger_absent_instructions
     return build_conditional_instructions
 
-
-def get_nba_toolset(tool_filter: List[str] = []):
-    nba_toolset = McpToolset(
-        connection_params=StdioConnectionParams(
-            server_params = StdioServerParameters(
-                command=sys.executable,
-                args=["-m", "nba_mcp_server.mcp_server"],
-            ),
-        ),
-        tool_filter=tool_filter
-    )
-    return nba_toolset
-
 def call_function(func, team1, team2, game_date):
-    """
-    We can potentially trigger function calls with preset inputs (team names and game date). 
-    So we don't need to hard code these functions here in orchestrator.py, we can instead do some interpretation to
-    determine which inputs they need and call accordingly
-    """
-    # define the parameters we have
+    """Dynamically calls a function with the available global context parameters."""
     available_params = {"team1": team1, "team2": team2, "game_date": game_date}
-    # Get parameter names the function expects
     func_param_names = inspect.signature(func).parameters.keys()
     params_to_pass = {
         name: available_params[name] 
         for name in func_param_names 
         if name in available_params
     }
-    # call the function and return the results
     return func(**params_to_pass) 
-
 
 async def execute_agent(app_name, agent, user_message):
     # create the runner + session
-    runner = InMemoryRunner(agent = agent, app_name = app_name)
+    runner = InMemoryRunner(agent=agent, app_name=app_name)
     session = await runner.session_service.create_session(
         app_name=app_name,
         user_id=user_id,
-        state = {"critique": ""}
+        state={"critique": ""}
     )
 
-    # execute the defined agentic loop
     results = []
     async for event in runner.run_async(  
         user_id=user_id,  
@@ -85,244 +55,139 @@ async def execute_agent(app_name, agent, user_message):
         if event.content and event.content.parts:  
             for part in event.content.parts:  
                 if part.text:  
-                    results.append((event.author, part.text))
-    return results, results[-2][1] # the last response will always be from the critic, so our actual final result is the second to last message
-
-
-class ResearchLoop():
-    def __init__(self, cfg):
-        self.cfg = cfg
-        subagents = []
-
-        for idx, action in enumerate(cfg.llm_actions):
-            new_agent = Agent(
-                name=f"{cfg.name}_action_{idx}",
-                model=cfg.model,
-                instruction=create_instructions_provider(
-                    trigger_key = "critique",
-                    trigger_found_instructions="Additional research required: {critique}",
-                    trigger_absent_instructions=action.system_prompt
-                    ),
-                tools=action.tools
-            )
-            subagents.append(new_agent)
+                    results.append(part.text)
     
-        research_critic = Agent(
-            name=f"{cfg.name}_research_critic",
-            model=research_configs.REVIEW_MODEL,
-            instruction=research_configs.REVIEW_SYSTEM_PROMPT,
-            output_key="critique",
-            tools=[FunctionTool(exit_loop)]
-        )
-        subagents.append(research_critic)
+    # The last response will always be from the critic (approving), so our actual final result is the second to last message
+    if len(results) >= 2:
+        return results[-2]
+    elif results:
+        return results[-1]
+    else:
+        return "No response generated."
 
+
+# --- The Graph Engine ---
+
+class GraphExecutor:
+    def __init__(self):
+        self.results_cache: Dict[str, Any] = {}
+        self.running_tasks: Dict[str, asyncio.Task] = {}
+
+    async def resolve(self, node: Union['agent_config', 'function_config'], context: Dict[str, Any]):
+        """
+        Check if the node has already been resolved and return the result if it has. Otherwise, resolve the node
+        """
+        # 1. Check Cache (Dedup)
+        if node.name in self.results_cache:
+            return self.results_cache[node.name]
+
+        # 2. Check if already running (handle diamond dependencies)
+        if node.name in self.running_tasks:
+            return await self.running_tasks[node.name]
+
+        # 3. Create a task to execute this node
+        task = asyncio.create_task(self._execute_node(node, context))
+        self.running_tasks[node.name] = task
+        
+        try:
+            result = await task
+            self.results_cache[node.name] = result
+            return result
+        except Exception as e:
+            del self.running_tasks[node.name]
+            raise e
+        
+    async def _execute_node(self, node: Union['agent_config', 'function_config'], context: Dict[str, Any]):
+        """
+        Recursively resolves an agen node and its dependencies or a function node.
+        """
+
+        print(f"Executing logic for: {node.name}")
+
+        # Execute the specific logic
+        if isinstance(node, function_config):
+            return await self._run_function(node, context)
+        elif isinstance(node, agent_config):
+            print(f"Resolving dependencies for: {node.name}")
+        
+            # Resolve Dependencies in Parallel
+            dep_results_list = await asyncio.gather(
+                *[self.resolve(dep, context) for dep in node.depends_on]
+            )
+        
+            # Map results to names for easy access
+            dep_results = {
+                dep.name: res for dep, res in zip(node.depends_on, dep_results_list)
+            }
+            return await self._run_agent(node, context, dep_results)
+        else:
+            raise ValueError(f"Unknown node type: {type(node)}")
+
+    async def _run_function(self, cfg: function_config, context: Dict):
+        # Functions currently only use global context
+        return call_function(cfg.function, context['team1'], context['team2'], context['game_date'])
+
+    async def _run_agent(self, cfg: agent_config, context: Dict, dep_results: Dict):
+        # 1. Determine which critic to use
+        if cfg.name == "writer":
+            critic_cfg = research_configs.writer_critic_agent
+        else:
+            critic_cfg = research_configs.research_critic_agent
+
+        # 2. Construct the prompt
+        base_prompt = f"Topic: {context['team1']} vs {context['team2']} on {context['game_date']}."
+        current_date = datetime.datetime.now().strftime('%m/%d/%Y')
+
+        if dep_results:
+            dependency_context_str = "\n\n".join(
+                [f"--- Input from {name} ---\n{content}" for name, content in dep_results.items()]
+            )
+            full_user_prompt = f"{base_prompt}\nToday's Date: {current_date}\n\nCONTEXT:\n{dependency_context_str}"
+        else:
+            full_user_prompt = f"{base_prompt}\nToday's Date: {current_date}"
+        
+        user_message = types.Content(role='user', parts=[types.Part.from_text(text=full_user_prompt)])
+
+        # 3. Construct the Loop Agent
+        worker_agent = Agent(
+            name=cfg.name,
+            model=cfg.model,
+            instruction=create_instructions_provider(
+                trigger_key="critique",
+                trigger_found_instructions="Additional work required: {critique}",
+                trigger_absent_instructions=cfg.system_prompt
+            ),
+            tools=cfg.tools
+        )
+        # The Critic
+        critic_agent = Agent(
+            name=f"{cfg.name}_critic",
+            model=critic_cfg.model,
+            instruction=critic_cfg.system_prompt,
+            output_key="critique",
+            tools=critic_cfg.tools
+        )
+        # The Loop
         loop_agent = LoopAgent(
-            name=f"{cfg.name}_research_loop_agent",
-            sub_agents=subagents,
+            name=f"{cfg.name}_loop",
+            sub_agents=[worker_agent, critic_agent],
             max_iterations=3
         )
-
-        research_organizer = Agent(
-            name=f"{cfg.name}_research_organizer",
-            model=research_configs.ORGANIZER_MODEL,
-            instruction=research_configs.ORGANIZER_SYSTEM_PROMPT,
-            output_key="research_results"
-        )
-
-        self.root_agent = SequentialAgent(
-            name=f"{cfg.name}_research_agent",
-            sub_agents=[loop_agent, research_organizer]
-        )
-
-    async def run(self, team1: str, team2: str, game_date: str):
-
-        # Call the setup action functions to collect context we'll inject into the context window
-        setup_context = []
-        for func in self.cfg.setup_actions:
-            setup_context.append(call_function(func, team1, team2, game_date)) 
-        setup_context = "\n".join(setup_context)    
-
-        # create the user message
-        user_text = f"Conduct research for the upcoming game between {team1} and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}"
-        if len(setup_context) > 0:
-            user_text += "\nAdditional context: \n" + setup_context
-        user_message = types.Content(  
-            role='user',  
-            parts=[types.Part.from_text(text=user_text)]  
-        )  
-
-        self.results, last_message = await execute_agent(f"{self.cfg.name}_research_pipeline", self.root_agent, user_message)
-
-        return last_message # just return the last message
-
-
-async def generate_research(team1: str, team2: str, game_date: str) -> Dict[str, str]:
-    """
-    Run all research agents in parallel and aggregate their findings.
-    Returns a dict mapping research domain to narrative findings.
-    """
-    # get LLM results
-    research_agents = {cfg.name: ResearchLoop(cfg) for cfg in research_configs.agent_configs}
-    res = await asyncio.gather(*[agent.run(team1, team2, game_date) for agent in research_agents.values()])
-    agent_results = {agent.cfg.name: result for agent, result in zip(research_agents.values(), res)}
-    # get hard-coded function results
-    function_results = {cfg.name: call_function(cfg.function, team1, team2, game_date) for cfg in research_configs.function_configs}
-    # return the joined agent and function results
-    return {**agent_results, **function_results} 
+        # execute
+        return await execute_agent(f"{cfg.name}_pipeline", loop_agent, user_message)
 
 async def write_editorial(team1: str, team2: str, game_date: str) -> str:
-    """
-    This function needs serious rework:
-    1. We are re-defining the same critic repeatedly because it cannot be re-used under different parent loopagents
-    2. We have config files, but we're hard-coding specific actions here 
-    3. The formula of the derivation of these loopagents is similar enough that we should be able to reduce code duplication
-    4. I'm referecing .llm_actions[0] for every system prompt, which is clearly wrong
-    """
-    print("STARTING RESEARCH")
-    research_findings = await generate_research(team1, team2, game_date)
-    print("RESEARCH COMPLETE")
-
-    analyst_base_prompt = f"You are analyzing the likely outcome of the game between {team1} (your team) and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}"
-    ################
-    # Analyse schedule difficulty
-    # Unlike most other agents, I dont' think we need a critique loop here
-    schedule_analyst = Agent(
-        name = analyst_configs.schedule_analyst.name,
-        mode = analyst_configs.schedule_analyst.model,
-        instruction = analyst_configs.schedule_analyst.llm_actions[0].system_prompt
-    )
-
-    user_message_schedule_analysis = types.Content(  
-        role='user',  
-        parts=[types.Part.from_text(text=analyst_base_prompt)]  
-    ) 
-    # PROBLEM:
-    # the results of this analysis are required for use in the match analysis agent, so I need to execute here. The problem is that its not done in parallel, so
-    # it slows down the entire report generation for a single prompt + response. This is another symptom of my currently suboptimal architecture.
-    _, schedule_analysis_results = await execute_agent(schedule_analyst.name, schedule_analyst, user_message_schedule_analysis)
-
-    ################
-    # Analyze match outcome
-    match_analyst = Agent(
-        name = analyst_configs.match_prediction_analyst.name,
-        model = analyst_configs.match_prediction_analyst.model,
-        instruction = create_instructions_provider(
-            trigger_key = "critique",
-            trigger_found_instructions="Additional research required: {critique}",
-            trigger_absent_instructions=analyst_configs.match_prediction_analyst.llm_actions[0].system_prompt
-        )
-    )
-
-    match_analysis_critic = Agent(
-        name="match_analysis_" + writing_configs.critic.name,
-        model=writing_configs.critic.model,
-        instruction=writing_configs.critic.llm_actions[0].system_prompt,
-        output_key="critique"
-    )
-
-    match_analysis_loop = LoopAgent(
-        name=f"match_analysis_loop_agent",
-        sub_agents=[match_analyst, match_analysis_critic],
-        max_iterations=3
-    )
-
-    # The code below hard codes the data we expect to get from the research_findings, but this defeats the 
-    # purpose of our config.py files, which are intended to be the flexible one source of truth on what data gets processed
-    # by each LLM. I think the the solution to this will involve converting this prompt into a config style as well. 
-    user_message_match_analysis = types.Content(  
-        role='user',  
-        parts=[types.Part.from_text(text=f"""
-            {analyst_base_prompt}
-            You have access to the the following data:  
-            Team performance: \n {research_findings['team_performance']}\n\n
-            Player performance: \n {research_findings['player_performance']}\n\n
-            Player activity status: \n {research_findings['inactive_players']}\n\n
-            Match odds according to betting sites: \n {research_findings['odds']}\n\n
-            Schedule analysis: \n {schedule_analysis_results}\n\n
-            """)]  
-    ) 
-    ################
-    # Fan narrative analyst
-    fan_narrative_analyst = Agent(
-        name = analyst_configs.fan_narrative_analyst.name,
-        model = analyst_configs.fan_narrative_analyst.model,
-        instruction = create_instructions_provider(
-            trigger_key = "critique",
-            trigger_found_instructions="Additional research required: {critique}",
-            trigger_absent_instructions=analyst_configs.fan_narrative_analyst.llm_actions[0].system_prompt
-        )
-    )
-
-    fan_narrative_critic = Agent(
-        name="fan_narrative_" + writing_configs.critic.name,
-        model=writing_configs.critic.model,
-        instruction=writing_configs.critic.llm_actions[0].system_prompt,
-        output_key="critique"
-    )
-
-    fan_narrative_loop = LoopAgent(
-        name=f"fan_narrative_loop_agent",
-        sub_agents=[fan_narrative_analyst, fan_narrative_critic],
-        max_iterations=3
-    )
-
-    user_message_fan_narrative = types.Content(  
-        role='user',  
-        parts=[types.Part.from_text(text=f"""
-            {analyst_base_prompt}
-            You have access to the the following data:  
-            Team performance: \n {research_findings['team_performance']}\n\n
-            Player performance: \n {research_findings['player_performance']}\n\n
-            Player activity status: \n {research_findings['inactive_players']}\n\n 
-            Schedule analysis: \n {schedule_analysis_results}\n\n                                            
-            """)]  
-    ) 
-    ################
-    # Execute the analysis loops
-    print("STARTING ANALYSIS")
-    res = await asyncio.gather(*[execute_agent(match_analysis_loop.name, match_analysis_loop, user_message_match_analysis),
-                                 execute_agent(fan_narrative_loop.name, fan_narrative_loop, user_message_fan_narrative)])
-    match_analysis_res, fan_narrative_res = res # unpack the results
-    _, match_analysis_res = match_analysis_res
-    _, fan_narrative_res = fan_narrative_res
-    print("ANALYSIS COMPLETE")
-    ################
-    # Write the final editorial
-    writer = Agent(
-        name=writing_configs.writer.name,
-        model=writing_configs.writer.model,
-        instruction=create_instructions_provider(
-            trigger_key = "critique",
-            trigger_found_instructions="Additional research required: {critique}",
-            trigger_absent_instructions=writing_configs.writer.llm_actions[0].system_prompt
-        )
-    )
-
-    writing_critic = Agent(
-        name="writing_" + writing_configs.critic.name,
-        model=writing_configs.critic.model,
-        instruction=writing_configs.critic.llm_actions[0].system_prompt,
-        output_key="critique"
-    )
-
-    writer_loop = LoopAgent(
-        name=f"editorial_loop_agent",
-        sub_agents=[writer, writing_critic],
-        max_iterations=3
-    )
-
-    user_message_writer = types.Content(  
-        role='user',  
-        parts=[types.Part.from_text(text=f"""
-            You are to write an editorial on the upcoming game between {team1} (your team) and {team2} on {game_date}. Todays date is {datetime.datetime.now().strftime('%m/%d/%Y')}
-            You have access to the the following data:  
-            Matchup Analysis: \n {match_analysis_res}\n\n
-            Fan narrative: \n {fan_narrative_res}\n\n
-            Team Rivalry/Drama: \n {research_findings['rivalry']}\n\n
-            """)]  
-    )
-
-    print("STARTING WRITING")
-    _, writer_results = await execute_agent(writer_loop.name, writer_loop, user_message_writer)
-    print("WRITING COMPLETE")
-    return writer_results
+    print(f"Starting Editorial Pipeline for {team1} vs {team2}")
+    
+    # 1. Define Global Context
+    context = {"team1": team1, "team2": team2, "game_date": game_date}
+    
+    # 2. Initialize Executor
+    executor = GraphExecutor()
+    
+    # 3. Run the Root Node (Writer)
+    # The executor will automatically trace back and run all dependencies
+    final_report = await executor.resolve(research_configs.writer_agent, context)
+    
+    print("Pipeline Complete.")
+    return final_report
