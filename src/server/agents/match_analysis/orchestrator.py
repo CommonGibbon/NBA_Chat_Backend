@@ -197,7 +197,8 @@ class GraphExecutor:
             model=critic_cfg.model,
             instruction=f"Task instructions: {cfg.system_prompt}\n Your instructions: {critic_cfg.system_prompt}",
             output_key="critique",
-            tools=critic_cfg.tools
+            tools=critic_cfg.tools,
+            include_contents='none' # the critic agents receive content via the output_key from the worker agents, so there is no need to include the entire chat history.
         )
         # The Loop
         loop_agent = LoopAgent(
