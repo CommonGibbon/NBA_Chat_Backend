@@ -39,6 +39,9 @@ team_schedule_func = function_config(
     function=get_team_schedule
 )
 
+GENERIC_CRITIQUE_RESPONSE_INSTRUCTIONS = """
+\nWhen receiving critique, regenerate your response incorporating the feedback. Present the new response as if it's your original attempt - do not mention receiving feedback, making corrections, or that this is a revision."
+"""
 
 # --- Agent Definitions ---
 
@@ -61,7 +64,7 @@ inactive_players_agent = agent_config(
             {"player": "string", "team": "string", "status": "OUT|DOUBTFUL|QUESTIONABLE|PROBABLE|ACTIVE", "reason": "string", "updated": "ISO8601"}
         ],
         }
-        """,
+        """ + GENERIC_CRITIQUE_RESPONSE_INSTRUCTIONS,
     tools=[google_search],
     depends_on=[] # could consider getting of a player list a dependency, but with search, this shouldn't be necessary
 )
@@ -75,7 +78,7 @@ odds_agent = agent_config(
         User sources like Las Vegas odds, Polymarket, or other sportsbooks.
 
         You will have access to a web search tool to complete this task. Call it as many times as you need.
-        """,
+        """ + GENERIC_CRITIQUE_RESPONSE_INSTRUCTIONS,
     tools=[google_search],
     depends_on=[]
 )
@@ -101,7 +104,7 @@ rivalry_agent = agent_config(
 
         Keep it concise, lead with the most compelling storylines, and focus on actionable drama - things fans can actually see unfold during the game. 
         You're finding the emotional subtext that makes every possession more interesting.
-        """,
+        """ + GENERIC_CRITIQUE_RESPONSE_INSTRUCTIONS,
     tools=[google_search],
     depends_on=[matchup_history_func] # Depends on the history function
 )
@@ -114,7 +117,7 @@ schedule_agent = agent_config(
         game dates, days since previous game, win/loss, points scored, plus/minus, opposing team, and locations.
         Provide a concise 4-5 sentence analysis of schedule difficulty, focusing on rest patterns and travel demands.
         Highlight the most challenging aspects and any scheduling advantages.
-        """,
+        """ + GENERIC_CRITIQUE_RESPONSE_INSTRUCTIONS,
     depends_on=[team_schedule_func]
 )
 
@@ -133,7 +136,7 @@ match_prediction_agent = agent_config(
             Detailed Analysis:
                 Statistical Breakdown: Compare the key offensive and defensive metrics for both teams.
                 X-Factor: Mention any intangibles, such as injuries, recent performance trends, that could impact the outcome.
-        """,
+        """ + GENERIC_CRITIQUE_RESPONSE_INSTRUCTIONS,
     depends_on=[
         team_performance_func, 
         player_performance_func, 
@@ -174,7 +177,7 @@ fan_narrative_agent = agent_config(
         4. **Balance Optimism & Realism**: While leaning optimistic, acknowledge potential challenges to maintain credibility. Frame challenges as "what we need to overcome" rather than "why we might lose."
 
         Remember: You're not predicting outcomes - you're giving fans a lens through which to experience the game, making every possession meaningful through the power of "what-if" thinking.
-        """,
+        """ + GENERIC_CRITIQUE_RESPONSE_INSTRUCTIONS,
     depends_on=[
         team_performance_func, 
         player_performance_func, 
@@ -253,7 +256,8 @@ writer_agent = agent_config(
         - Use **“we/our” sparingly** but clearly align with team_1’s side.
         - Concrete, vivid, and **precise**; avoid hot takes and empty hype.
         - Emphasize **conditional thinking**: “if X happens, this leans toward Y.”
-
+        - Avoid bombastic claims/"explosive" language, and adopt a slightly more reserved tone. 
+        
         ---
 
         ## Formatting Requirements
@@ -390,7 +394,7 @@ writer_agent = agent_config(
 
         - Use **only** the analysis content you are given.
         - **Do not** invent quotes, injuries, or narratives. All drama and rivalry angles must come from the provided research.
-        """
+        """ + GENERIC_CRITIQUE_RESPONSE_INSTRUCTIONS
 )
 
 writer_critic_agent = agent_config(

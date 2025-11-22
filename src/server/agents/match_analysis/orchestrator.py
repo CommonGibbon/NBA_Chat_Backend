@@ -8,6 +8,9 @@ from typing import Dict, Any, Union
 from dotenv import load_dotenv
 import datetime
 import inspect
+from .logging_plugin import NodeLoggingPlugin
+import os
+from .log_context import active_log_path, log_to_active_node
 
 load_dotenv()
 
@@ -37,16 +40,18 @@ def call_function(func, team1, team2, game_date):
     }
     return func(**params_to_pass) 
 
-async def execute_agent(app_name, agent, user_message):
+async def execute_agent(app_name, agent, user_message, log_path: str = None):
+    plugins = [NodeLoggingPlugin(log_path)] if log_path else []
+    
     # create the runner + session
-    runner = InMemoryRunner(agent=agent, app_name=app_name)
+    runner = InMemoryRunner(agent=agent, app_name=app_name, plugins=plugins)
     session = await runner.session_service.create_session(
         app_name=app_name,
         user_id=user_id,
         state={"critique": ""}
     )
 
-    results = []
+    results = [] # I don't need to collect these results, I don't think, but run_async requires that I do.
     async for event in runner.run_async(  
         user_id=user_id,  
         session_id=session.id,  
@@ -70,6 +75,13 @@ class GraphExecutor:
     def __init__(self):
         self.results_cache: Dict[str, Any] = {}
         self.running_tasks: Dict[str, asyncio.Task] = {}
+        # Create a unique timestamped folder for this entire run
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_log_dir = f"logs/run_{timestamp}"
+        os.makedirs(self.run_log_dir, exist_ok=True)
+
+    def _get_log_path(self, node_name: str) -> str:
+        return os.path.join(self.run_log_dir, f"{node_name}.log")
 
     async def resolve(self, node: Union['agent_config', 'function_config'], context: Dict[str, Any]):
         """
@@ -101,31 +113,51 @@ class GraphExecutor:
         """
 
         print(f"Executing logic for: {node.name}")
+        # Log path for this specific node
+        log_path = self._get_log_path(node.name)
 
-        # Execute the specific logic
-        if isinstance(node, function_config):
-            return await self._run_function(node, context)
-        elif isinstance(node, agent_config):
-            print(f"Resolving dependencies for: {node.name}")
-        
-            # Resolve Dependencies in Parallel
-            dep_results_list = await asyncio.gather(
-                *[self.resolve(dep, context) for dep in node.depends_on]
-            )
-        
-            # Map results to names for easy access
-            dep_results = {
-                dep.name: res for dep, res in zip(node.depends_on, dep_results_list)
-            }
-            return await self._run_agent(node, context, dep_results)
-        else:
-            raise ValueError(f"Unknown node type: {type(node)}")
+        # Set the context variable token so we can reset it later
+        token = active_log_path.set(log_path)
+
+        try:
+            # Initialize the log file
+            log_to_active_node(f"\n--- START NODE: {node.name} ---\nContext keys: {list(context.keys())}")
+            # Execute the specific logic
+            if isinstance(node, function_config):
+                try:
+                    # When this function runs, any inner function using log_context 
+                    # will auto-write to 'log_path'
+                    result = await self._run_function(node, context)
+                    
+                    log_to_active_node(f"\n--- SUCCESS ---\n")
+                    return result
+                except Exception as e:
+                    log_to_active_node(f"\n--- FATAL ERROR ---\n{str(e)}")
+                    raise e
+            elif isinstance(node, agent_config):
+                print(f"Resolving dependencies for: {node.name}")
+            
+                # Resolve Dependencies in Parallel
+                dep_results_list = await asyncio.gather(
+                    *[self.resolve(dep, context) for dep in node.depends_on]
+                )
+            
+                # Map results to names for easy access
+                dep_results = {
+                    dep.name: res for dep, res in zip(node.depends_on, dep_results_list)
+                }
+                return await self._run_agent(node, context, dep_results, log_path)
+            else:
+                raise ValueError(f"Unknown node type: {type(node)}")
+        finally:
+            # Reset context var to avoid leaking state between async tasks
+            active_log_path.reset(token)
 
     async def _run_function(self, cfg: function_config, context: Dict):
         # Functions currently only use global context
         return call_function(cfg.function, context['team1'], context['team2'], context['game_date'])
 
-    async def _run_agent(self, cfg: agent_config, context: Dict, dep_results: Dict):
+    async def _run_agent(self, cfg: agent_config, context: Dict, dep_results: Dict, log_path: str):
         # 1. Determine which critic to use
         if cfg.name == "writer":
             critic_cfg = research_configs.writer_critic_agent
@@ -150,11 +182,12 @@ class GraphExecutor:
         worker_agent = Agent(
             name=cfg.name,
             model=cfg.model,
-            instruction=create_instructions_provider(
-                trigger_key="critique",
-                trigger_found_instructions="Additional work required: {critique}",
-                trigger_absent_instructions=cfg.system_prompt
-            ),
+            instruction=cfg.system_prompt,
+            #create_instructions_provider(
+            #    trigger_key="critique",
+            #    trigger_found_instructions="Additional work required: {critique}",
+            #    trigger_absent_instructions=cfg.system_prompt
+            #),
             output_key="output",
             tools=cfg.tools
         )
@@ -173,7 +206,7 @@ class GraphExecutor:
             max_iterations=3
         )
         # execute
-        return await execute_agent(f"{cfg.name}_pipeline", loop_agent, user_message)
+        return await execute_agent(f"{cfg.name}_pipeline", loop_agent, user_message, log_path)
 
 async def write_editorial(team1: str, team2: str, game_date: str) -> str:
     print(f"Starting Editorial Pipeline for {team1} vs {team2}")

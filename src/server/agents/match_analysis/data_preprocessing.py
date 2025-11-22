@@ -4,29 +4,30 @@ from nba_api.stats.endpoints import leaguegamefinder, boxscoretraditionalv3, box
 from nba_mcp_server.mcp_server import get_current_season, find_team_id
 from tenacity import retry, stop_after_attempt, wait_exponential
 from datetime import datetime, timedelta
+from .log_context import log_retry_attempt
 
 # The code in this file is meant to collect data which will be fed into an LLM process. The principle is,
 # rather than letting the LLM figure out how to make the correct sequence of API calls, we'll make them for it (when feasible).
 # Define wait parameters for retrying nba API calls
-wait_mult = 3
-wait_min = 4
+wait_mult = 5
+wait_min = 1
 wait_max = 120
-wait_attempts = 8
-@retry(stop=stop_after_attempt(wait_attempts), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max))
+wait_attempts =10
+@retry(stop=stop_after_attempt(wait_attempts), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max), before_sleep=log_retry_attempt)
 def _get_box_advanced(game_id, team_id, columns, type):
     box_advanced = boxscoreadvancedv3.BoxScoreAdvancedV3(game_id=game_id)
     box_advanced = box_advanced.team_stats.get_data_frame() if type == "T" else box_advanced.player_stats.get_data_frame()
     box_advanced = box_advanced[box_advanced['teamId'] == team_id]
     return box_advanced[columns]
 
-@retry(stop=stop_after_attempt(wait_attempts), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max))
+@retry(stop=stop_after_attempt(wait_attempts), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max), before_sleep=log_retry_attempt)
 def _get_box_traditional(game_id, team_id, columns, type):
     box_traditional = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id)
     box_traditional = box_traditional.team_stats.get_data_frame() if type == "T" else box_traditional.player_stats.get_data_frame()
     box_traditional = box_traditional[box_traditional['teamId'] == team_id]
     return box_traditional[columns]
 
-@retry(stop=stop_after_attempt(wait_attempts), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max))
+@retry(stop=stop_after_attempt(wait_attempts), wait=wait_exponential(multiplier=wait_mult, min=wait_min, max=wait_max), before_sleep=log_retry_attempt)
 def _get_game_record(team_id: str):
     #Get all the games in the current season for the designated team
     data = leaguegamefinder.LeagueGameFinder(
